@@ -210,12 +210,39 @@ curl http://<VM_PUBLIC_IP>:3002/health
 curl http://<VM_PUBLIC_IP>:3003/health
 
 # From outside the VM, this should succeed:
-curl http://<VM_PUBLIC_IP>/health
+curl http://<VM_PUBLIC_IP>/service-a/health
 ```
 
 ---
 
 ## Installation
+
+### Quick install (recommended)
+
+The `scripts/install.sh` script automates the entire setup below. It installs
+dependencies, creates the virtual environment, configures `/etc/hosts`, installs
+the systemd units (auto-detecting your username and project path), removes the
+default Nginx site, and starts everything.
+
+```bash
+git clone <repo-url>
+cd production-service-lab
+bash scripts/install.sh
+```
+
+Then verify:
+
+```bash
+curl http://localhost/service-a/health
+```
+
+> Note: the script does not configure the UFW firewall. To apply the Layer 2
+> network protection described above, run the firewall step (step 7) manually
+> after install.
+
+The manual steps below explain what the script does, for reference or debugging.
+
+---
 
 ### 1. Clone the repository
 
@@ -265,8 +292,8 @@ After=network.target
 
 [Service]
 User=$U
-WorkingDirectory=$P/services/service-c
-ExecStart=$P/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3003
+WorkingDirectory=$P
+ExecStart=$P/venv/bin/uvicorn services.service-c.app:app --host 127.0.0.1 --port 3003
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
@@ -285,8 +312,8 @@ Requires=service-c.service
 
 [Service]
 User=$U
-WorkingDirectory=$P/services/service-b
-ExecStart=$P/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3002
+WorkingDirectory=$P
+ExecStart=$P/venv/bin/uvicorn services.service-b.app:app --host 127.0.0.1 --port 3002
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
@@ -305,8 +332,8 @@ Requires=service-b.service service-c.service
 
 [Service]
 User=$U
-WorkingDirectory=$P/services/service-a
-ExecStart=$P/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3001
+WorkingDirectory=$P
+ExecStart=$P/venv/bin/uvicorn services.service-a.app:app --host 127.0.0.1 --port 3001
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
@@ -404,7 +431,7 @@ sudo systemctl status service-a service-b service-c nginx
 
 ```bash
 # Through Nginx (public path)
-curl -s http://localhost/health
+curl -s http://localhost/service-a/health
 
 # Direct to each service
 curl -s http://localhost:3001/health
@@ -415,7 +442,7 @@ curl -s http://localhost:3003/health
 ### Full chain test
 
 ```bash
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/service-a/greet-service-b
 ```
 
 Expected response:
@@ -636,8 +663,8 @@ After reboot:
 
 ```bash
 sudo systemctl status service-a service-b service-c nginx
-curl -s http://localhost/health
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/service-a/health
+curl -s http://localhost/service-a/greet-service-b
 ```
 
 All services should be running without manual intervention.
