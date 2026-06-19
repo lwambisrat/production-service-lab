@@ -3,11 +3,11 @@ echo "== Services =="
 systemctl status service-a service-b service-c nginx --no-pager
 
 echo "== Health =="
-curl -s localhost/health
+curl -s http://localhost/service-a/health
 echo
-curl -s localhost:3002/health
+curl -s http://service-b.internal:3002/health
 echo
-curl -s localhost:3003/health
+curl -s http://service-c.internal:3003/health
 echo
 
 echo "== Ports =="
