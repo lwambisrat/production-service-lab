@@ -1,0 +1,14 @@
+[Unit]
+Description=Production Lab Service C
+After=network.target
+
+[Service]
+User=lwambisrat
+WorkingDirectory=/home/lwambisrat.guest/production-service-lab
+ExecStart=/home/lwambisrat.guest/production-service-lab/venv/bin/uvicorn services.service-c.app:app --host 127.0.0.1 --port 3003
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
