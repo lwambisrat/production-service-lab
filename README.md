@@ -403,16 +403,18 @@ sudo systemctl status service-a service-b service-c nginx
 ### Health checks
 
 ```bash
-# Through Nginx (public path)
+# Through Nginx (public path — what the instructor sees)
 curl -s http://localhost/health
 
-# Direct to each service
+# Direct to each service (internal testing only)
 curl -s http://localhost:3001/health
 curl -s http://localhost:3002/health
 curl -s http://localhost:3003/health
 ```
 
 ### Full chain test
+
+This triggers the entire A → B → C → A flow in one request:
 
 ```bash
 curl -s http://localhost/greet-service-b
@@ -425,6 +427,53 @@ Expected response:
   "request_id": "<uuid>",
   "status": "success",
   "message": "Request completed successfully"
+}
+```
+
+### Test each service endpoint individually
+
+**Service A — trigger ride booking:**
+
+```bash
+curl -s http://localhost:3001/greet-service-b
+```
+
+**Service B — trigger driver matching:**
+
+```bash
+curl -s http://localhost:3002/greet
+```
+
+**Service C — trigger ride dispatch:**
+
+```bash
+curl -s http://localhost:3003/greet-c
+```
+
+**Service A — test callback endpoint:**
+
+```bash
+curl -s -X POST http://localhost:3001/greeting-rcvd \
+  -H "Content-Type: application/json" \
+  -d '{"request_id": "test-123", "source_service": "service-c", "ride_status": "driver_assigned"}'
+```
+
+### Test error handling
+
+Hit an endpoint that does not exist — should return a structured 404:
+
+```bash
+curl -s http://localhost/invalid-route
+```
+
+Expected response:
+
+```json
+{
+  "error": "Endpoint not found",
+  "service": "service-a",
+  "path": "/invalid-route",
+  "request_id": "<uuid>"
 }
 ```
 
