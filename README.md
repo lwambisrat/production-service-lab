@@ -290,6 +290,8 @@ sudo systemctl status ride-booking driver-matching ride-dispatch nginx
 
 ```bash
 # Answered by Nginx directly — no service involved
+sudo cp nginx/production-service-lab.conf /etc/nginx/sites-available/production-service-lab
+sudo nginx -t && sudo systemctl reload nginx
 curl http://localhost/nginx-health
 ```
 
