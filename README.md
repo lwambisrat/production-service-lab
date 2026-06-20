@@ -160,6 +160,8 @@ Service B and Service C are never referenced in the Nginx configuration and are 
 ### Nginx-specific health check
 
 ```bash
+sudo cp nginx/production-service-lab.conf /etc/nginx/sites-available/production-service-lab
+sudo nginx -t && sudo systemctl reload nginx
 curl http://localhost/nginx-health
 # ok
 ```
