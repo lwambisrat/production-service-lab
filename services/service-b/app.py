@@ -1,161 +1,155 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from datetime import datetime
-import httpx
-import json
+"""
+Service B — Driver Matching Service (port 3002).
+
+Internal service. Receives ride requests from Service A, matches
+the nearest available driver, and forwards to Service C for dispatch.
+
+Responsibilities:
+  - GET  /health        — liveness probe
+  - POST /driver/match  — match nearest driver, forward to dispatch
+"""
+
 import math
+import os
 import uuid
 
-app = FastAPI(title="Service B - Driver Matching Service")
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-SERVICE_NAME = "service-b"
-SERVICE_PORT = 3002
-SERVICE_C_URL = "http://service-c.internal:3003/greet-c"
+from common.logging_setup import get_logger, log_event
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+SERVICE_NAME  = "service-b"
+BIND_HOST     = os.getenv("BIND_HOST", "127.0.0.1")
+SERVICE_PORT  = int(os.getenv("SERVICE_PORT", "3002"))
+DISPATCH_URL  = os.getenv("DISPATCH_URL", "http://service-c.internal:3003/ride/dispatch")
+DOWNSTREAM_TIMEOUT = float(os.getenv("DOWNSTREAM_TIMEOUT", "5"))
 
 MOCK_DRIVERS = [
     {"driver_id": "DRV-101", "name": "Brian", "area": "Westlands", "lat": -1.2650, "lng": 36.8120},
-    {"driver_id": "DRV-202", "name": "Mary", "area": "Kilimani", "lat": -1.2921, "lng": 36.7834},
-    {"driver_id": "DRV-303", "name": "Kevin", "area": "CBD", "lat": -1.2864, "lng": 36.8172},
+    {"driver_id": "DRV-202", "name": "Mary",  "area": "Kilimani",  "lat": -1.2921, "lng": 36.7834},
+    {"driver_id": "DRV-303", "name": "Kevin", "area": "CBD",       "lat": -1.2864, "lng": 36.8172},
 ]
 
+logger = get_logger(SERVICE_NAME)
+app    = FastAPI(title="Service B — Driver Matching Service")
 
-def now():
-    return datetime.utcnow().isoformat() + "Z"
+log_event(logger, "service_starting", f"{SERVICE_NAME} starting on {BIND_HOST}:{SERVICE_PORT}",
+          request_id="startup", target=DISPATCH_URL)
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-def log_event(event, request_id, path, status, extra=None):
-    log = {
-        "timestamp": now(),
-        "service": SERVICE_NAME,
-        "event": event,
-        "request_id": request_id,
-        "path": path,
-        "status": status,
-    }
-    if extra:
-        log.update(extra)
-    print(json.dumps(log), flush=True)
-
-
-def distance_score(lat1, lng1, lat2, lng2):
+def _distance(lat1, lng1, lat2, lng2) -> float:
     return math.sqrt((lat1 - lat2) ** 2 + (lng1 - lng2) ** 2)
 
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health():
-    return {
-        "service": SERVICE_NAME,
-        "status": "healthy",
-        "port": SERVICE_PORT,
-        "message": "Hello service-b listening on 3002",
+    return {"service": SERVICE_NAME, "status": "healthy", "port": SERVICE_PORT}
+
+
+@app.post("/driver/match")
+async def driver_match(request: Request):
+    """Match the nearest available driver and forward to ride dispatch."""
+    body       = await request.json()
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+    log_event(logger, "driver_matching_started", "Driver matching started",
+              request_id, ride_id=body.get("ride_id"), customer=body.get("customer"))
+
+    pickup = body.get("pickup", {})
+    best   = min(MOCK_DRIVERS,
+                 key=lambda d: _distance(pickup.get("lat", 0), pickup.get("lng", 0), d["lat"], d["lng"]))
+
+    matched_driver = {
+        "driver_id":       best["driver_id"],
+        "driver_name":     best["name"],
+        "area":            best["area"],
+        "driver_location": {"lat": best["lat"], "lng": best["lng"]},
+        "eta_minutes":     3,
+        "match_reason":    "Closest available driver to pickup location",
     }
 
+    log_event(logger, "driver_matched", "Nearest driver matched",
+              request_id,
+              driver_id=matched_driver["driver_id"],
+              driver_name=matched_driver["driver_name"],
+              eta_minutes=matched_driver["eta_minutes"])
 
-@app.get("/greet")
-async def greet(request: Request):
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-    ride_header = request.headers.get("X-Ride-Request")
+    dispatch_payload = {
+        "request_id":    request_id,
+        "ride_id":       body.get("ride_id"),
+        "customer":      body.get("customer"),
+        "pickup":        body.get("pickup"),
+        "dropoff":       body.get("dropoff"),
+        "matched_driver": matched_driver,
+    }
 
     try:
-        ride_request = json.loads(ride_header) if ride_header else {}
-        pickup = ride_request.get("pickup", {})
-
-        best_driver = min(
-            MOCK_DRIVERS,
-            key=lambda d: distance_score(
-                pickup.get("lat", 0),
-                pickup.get("lng", 0),
-                d["lat"],
-                d["lng"],
-            ),
-        )
-
-        matched_driver = {
-            "driver_id": best_driver["driver_id"],
-            "driver_name": best_driver["name"],
-            "area": best_driver["area"],
-            "driver_location": {
-                "lat": best_driver["lat"],
-                "lng": best_driver["lng"],
-            },
-            "eta_minutes": 3,
-            "match_reason": "Closest available driver to pickup location",
-        }
-
-        dispatch_payload = {
-            "request_id": request_id,
-            "ride_request": ride_request,
-            "matched_driver": matched_driver,
-        }
-
-        log_event(
-            "driver_matched",
-            request_id,
-            "/greet",
-            200,
-            {"matched_driver": matched_driver},
-        )
-
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
-                SERVICE_C_URL,
-                headers={
-                    "X-Request-ID": request_id,
-                    "X-Dispatch-Payload": json.dumps(dispatch_payload),
-                },
+        async with httpx.AsyncClient(timeout=DOWNSTREAM_TIMEOUT) as client:
+            response = await client.post(
+                DISPATCH_URL,
+                json=dispatch_payload,
+                headers={"X-Request-ID": request_id},
             )
 
-        log_event(
-            "request_forwarded",
-            request_id,
-            "/greet",
-            response.status_code,
-            {"target": "service-c"},
-        )
+        log_event(logger, "dispatch_request_forwarded", "Dispatch request forwarded to service-c",
+                  request_id, target="service-c", status=response.status_code)
 
-        return {
+        return JSONResponse(content={
+            "request_id":    request_id,
+            "status":        "driver_matched",
+            "matched_driver": matched_driver,
+        })
+
+    except Exception as exc:
+        log_event(logger, "dispatch_service_unreachable",
+                  "Ride dispatch service is unavailable",
+                  request_id, "ERROR", target="service-c", error=str(exc))
+
+        return JSONResponse(status_code=502, content={
             "request_id": request_id,
-            "status": "forwarded",
-            "target": "service-c",
-        }
+            "status":     "error",
+            "message":    "Ride dispatch service is unavailable. Driver was matched but ride could not be dispatched.",
+        })
 
-    except Exception as e:
-        log_event(
-            "request_failed",
-            request_id,
-            "/greet",
-            500,
-            {"error": str(e)},
-        )
 
-        return JSONResponse(
-            status_code=500,
-            content={
-                "request_id": request_id,
-                "status": "error",
-                "message": "Driver matching failed",
-            },
-        )
-
+# ---------------------------------------------------------------------------
+# Error handlers
+# ---------------------------------------------------------------------------
 
 @app.exception_handler(404)
-async def not_found_handler(request: Request, exc):
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+async def not_found(request: Request, exc):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    log_event(logger, "route_not_found", f"No route for {request.method} {request.url.path}",
+              request_id, "WARNING", method=request.method, path=str(request.url.path))
 
-    log_event(
-        "route_not_found",
-        request_id,
-        str(request.url.path),
-        404,
-        {"method": request.method},
-    )
+    return JSONResponse(status_code=404, content={
+        "error":               "Endpoint not found",
+        "service":             SERVICE_NAME,
+        "path":                str(request.url.path),
+        "request_id":          request_id,
+        "hint":                f"'{request.url.path}' does not exist on {SERVICE_NAME}",
+        "available_endpoints": ["GET /health", "POST /driver/match"],
+    })
 
-    return JSONResponse(
-        status_code=404,
-        content={
-            "error": "Endpoint not found",
-            "service": SERVICE_NAME,
-            "path": str(request.url.path),
-            "request_id": request_id,
-        },
-    )
+
+@app.exception_handler(500)
+async def internal_error(request: Request, exc):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    log_event(logger, "internal_error", "Unhandled internal error",
+              request_id, "ERROR", path=str(request.url.path), error=str(exc))
+
+    return JSONResponse(status_code=500, content={
+        "error":      "Internal server error",
+        "service":    SERVICE_NAME,
+        "request_id": request_id,
+    })

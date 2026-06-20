@@ -1,0 +1,27 @@
+[Unit]
+Description=Production Lab Service B — Driver Matching Service (port 3002)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+Group=YOUR_USERNAME
+WorkingDirectory=YOUR_PROJECT_PATH/services/service-b
+
+Environment=BIND_HOST=127.0.0.1
+Environment=SERVICE_PORT=3002
+Environment=DISPATCH_URL=http://service-c.internal:3003/ride/dispatch
+Environment=DOWNSTREAM_TIMEOUT=5
+Environment=PYTHONPATH=YOUR_PROJECT_PATH/services
+
+ExecStart=YOUR_PROJECT_PATH/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3002
+
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

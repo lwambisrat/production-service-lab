@@ -1,0 +1,31 @@
+[Unit]
+Description=Production Lab Service A — Ride Booking API (port 3001)
+After=network-online.target driver-matching.service ride-dispatch.service
+Wants=network-online.target driver-matching.service ride-dispatch.service
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+Group=YOUR_USERNAME
+WorkingDirectory=YOUR_PROJECT_PATH/services/service-a
+
+Environment=BIND_HOST=127.0.0.1
+Environment=SERVICE_PORT=3001
+Environment=DRIVER_MATCHING_URL=http://service-b.internal:3002/driver/match
+Environment=DOWNSTREAM_TIMEOUT=5
+Environment=PYTHONPATH=YOUR_PROJECT_PATH/services
+
+# Readiness gate — blocks until Service B and Service C answer /health.
+# systemd's After= only guarantees process launch, not application readiness.
+ExecStartPre=YOUR_PROJECT_PATH/scripts/wait-for-deps.sh
+
+ExecStart=YOUR_PROJECT_PATH/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3001
+
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
