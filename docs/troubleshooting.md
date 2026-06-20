@@ -5,8 +5,8 @@
 Check:
 
 ```bash
-systemctl status service-a
-journalctl -u service-a -n 50
+systemctl status ride-booking
+journalctl -u ride-booking -n 50
 ```
 
 Possible causes:
@@ -38,7 +38,7 @@ sudo pkill -f uvicorn
 Restart:
 
 ```bash
-sudo systemctl restart service-a
+sudo systemctl restart ride-booking
 ```
 
 ---
@@ -48,8 +48,8 @@ sudo systemctl restart service-a
 Check:
 
 ```bash
-systemctl status service-b
-systemctl status service-c
+systemctl status driver-matching
+systemctl status ride-dispatch
 ```
 
 If B or C is down:
@@ -164,7 +164,7 @@ HTTP 404
 Check logs:
 
 ```bash
-journalctl -u service-a -n 20
+journalctl -u ride-booking -n 20
 ```
 
 Expected log:
@@ -184,7 +184,7 @@ sudo reboot
 After reboot:
 
 ```bash
-systemctl status service-a service-b service-c nginx
+systemctl status ride-booking driver-matching ride-dispatch nginx
 ```
 
 Expected:
