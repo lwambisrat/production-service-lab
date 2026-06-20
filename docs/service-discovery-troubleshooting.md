@@ -1,0 +1,196 @@
+# Service Discovery Troubleshooting Guide
+
+## What is Service Discovery?
+
+In this system, services do not communicate using IP addresses. Instead they use names:
+
+- `http://service-b.internal:3002`
+- `http://service-c.internal:3003`
+- `http://service-a.internal:3001`
+
+These names are resolved using `/etc/hosts`. When Service A calls `service-b.internal`, Linux looks up that name in `/etc/hosts`, finds `127.0.0.1`, and connects to Service B on port 3002.
+
+If that lookup fails, the services cannot communicate and the entire request chain breaks.
+
+---
+
+## How Name Resolution Works
+
+Linux resolves hostnames using a resolver order defined in `/etc/nsswitch.conf`.
+
+The line that matters is:
+
+```
+hosts: files dns
+```
+
+- `files` means check `/etc/hosts` first
+- `dns` means fall back to a DNS server if not found in the file
+
+Because our service names are defined in `/etc/hosts`, they resolve locally without needing any DNS server.
+
+---
+
+## Symptoms of a Service Discovery Failure
+
+- `curl http://localhost/greet-service-b` returns a 500 or 502 error
+- Service A logs show a connection error to `service-b.internal`
+- `getent hosts service-b.internal` returns nothing
+- `ping service-b.internal` says "Name or service not known"
+
+---
+
+## Step-by-Step Troubleshooting
+
+### Step 1 — Check if the entries exist in /etc/hosts
+
+```bash
+cat /etc/hosts | grep service
+```
+
+Expected output:
+
+```
+127.0.0.1   service-a.internal
+127.0.0.1   service-b.internal
+127.0.0.1   service-c.internal
+```
+
+If any line is missing, that service name cannot be resolved.
+
+---
+
+### Step 2 — Test name resolution directly
+
+```bash
+getent hosts service-a.internal
+getent hosts service-b.internal
+getent hosts service-c.internal
+```
+
+Each should return:
+
+```
+127.0.0.1       service-a.internal
+127.0.0.1       service-b.internal
+127.0.0.1       service-c.internal
+```
+
+If a line returns nothing, the name is not resolving even if the entry appears to exist. Check for typos in `/etc/hosts`.
+
+---
+
+### Step 3 — Test connectivity using the service name
+
+```bash
+curl -s http://service-b.internal:3002/health
+curl -s http://service-c.internal:3003/health
+```
+
+If this succeeds, name resolution is working and the services are reachable by name.
+
+If this fails but `getent` returns the correct IP, the service itself may be down — check with `sudo systemctl status service-b`.
+
+---
+
+### Step 4 — Check the resolver order
+
+```bash
+cat /etc/nsswitch.conf | grep hosts
+```
+
+Expected:
+
+```
+hosts: files dns
+```
+
+If it shows `dns files` instead, Linux queries DNS before checking `/etc/hosts`. Since `.internal` names are not in any DNS server, they will fail to resolve.
+
+Fix:
+
+```bash
+sudo nano /etc/nsswitch.conf
+```
+
+Change `dns files` to `files dns` and save.
+
+---
+
+### Step 5 — Re-add missing entries
+
+If any entries are missing from `/etc/hosts`, add them:
+
+```bash
+echo '127.0.0.1   service-a.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   service-b.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   service-c.internal' | sudo tee -a /etc/hosts
+```
+
+Verify they were added:
+
+```bash
+cat /etc/hosts | grep service
+```
+
+---
+
+### Step 6 — Restart affected services
+
+After fixing `/etc/hosts`, restart the services so they pick up the change:
+
+```bash
+sudo systemctl restart service-c
+sudo systemctl restart service-b
+sudo systemctl restart service-a
+```
+
+Always restart in dependency order — C first, then B, then A.
+
+---
+
+### Step 7 — Test the full chain again
+
+```bash
+curl -s http://localhost/greet-service-b
+```
+
+Expected response:
+
+```json
+{
+  "request_id": "<uuid>",
+  "status": "success",
+  "message": "Request completed successfully"
+}
+```
+
+---
+
+## Quick Reference — All Diagnostic Commands
+
+```bash
+# Check /etc/hosts entries
+cat /etc/hosts | grep service
+
+# Test name resolution
+getent hosts service-a.internal
+getent hosts service-b.internal
+getent hosts service-c.internal
+
+# Test connectivity by name
+curl -s http://service-b.internal:3002/health
+curl -s http://service-c.internal:3003/health
+
+# Check resolver order
+cat /etc/nsswitch.conf | grep hosts
+
+# Check service logs for connection errors
+sudo journalctl -u service-a -n 30
+```
+
+---
+
+## Most Common Cause
+
+The `/etc/hosts` entries were never added or were removed. This is always the first thing to check. It is fixed in under 30 seconds by re-adding the three lines.
