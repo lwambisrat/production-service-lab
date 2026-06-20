@@ -10,7 +10,7 @@ Service B is the Driver Matching Service. Service A depends on it to complete ev
 
 When a user sends a request and Service B is unavailable:
 
-1. Client sends `GET /greet-service-b` through Nginx
+1. Client sends `GET /greet-driver-matching` through Nginx
 2. Nginx forwards it to Service A
 3. Service A tries to call `http://service-b.internal:3002/greet`
 4. The connection times out after 5 seconds
@@ -22,7 +22,7 @@ The client receives:
 {
   "request_id": "<uuid>",
   "status": "error",
-  "message": "Failed to reach service-b"
+  "message": "Failed to reach driver-matching"
 }
 ```
 
@@ -35,10 +35,10 @@ Service A logs the failure as a structured JSON error:
 ```json
 {
   "timestamp": "2026-06-20T...",
-  "service": "service-a",
+  "service": "ride-booking",
   "event": "request_failed",
   "request_id": "<uuid>",
-  "path": "/greet-service-b",
+  "path": "/greet-driver-matching",
   "status": 500,
   "error": "..."
 }
@@ -49,7 +49,7 @@ Service B produces no logs because it never received the request.
 View the logs:
 
 ```bash
-sudo journalctl -u service-a -n 30
+sudo journalctl -u ride-booking -n 30
 ```
 
 ---
@@ -67,8 +67,8 @@ Every request during the outage will return the same 500 error until Service B c
 The systemd service file for Service A contains:
 
 ```ini
-After=network.target service-b.service service-c.service
-Requires=service-b.service service-c.service
+After=network.target driver-matching.service ride-dispatch.service
+Requires=driver-matching.service ride-dispatch.service
 ```
 
 This means:
@@ -85,7 +85,7 @@ If Service B is down at boot time, Service A will not become operational.
 ### Step 1 — Check if Service B is running
 
 ```bash
-sudo systemctl status service-b
+sudo systemctl status driver-matching
 ```
 
 If it shows `inactive` or `failed`, Service B is down.
@@ -93,7 +93,7 @@ If it shows `inactive` or `failed`, Service B is down.
 ### Step 2 — Check why Service B went down
 
 ```bash
-sudo journalctl -u service-b -n 50 -l
+sudo journalctl -u driver-matching -n 50 -l
 ```
 
 Look for:
@@ -105,7 +105,7 @@ Look for:
 ### Step 3 — Check Service A's logs for the error
 
 ```bash
-sudo journalctl -u service-a -n 20
+sudo journalctl -u ride-booking -n 20
 ```
 
 You should see `request_failed` with a connection error pointing to `service-b.internal`.
@@ -125,8 +125,8 @@ If nothing is returned, nothing is listening on port 3002 — Service B is defin
 Restart Service B first, then Service A:
 
 ```bash
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 ```
 
 Always restart in dependency order. If you restart Service A before Service B is up, systemd will refuse to start it because the `Requires=` dependency is not satisfied.
@@ -134,8 +134,8 @@ Always restart in dependency order. If you restart Service A before Service B is
 Verify recovery:
 
 ```bash
-sudo systemctl status service-b service-a
-curl -s http://localhost/greet-service-b
+sudo systemctl status driver-matching ride-booking
+curl -s http://localhost/greet-driver-matching
 ```
 
 ---
@@ -145,19 +145,19 @@ curl -s http://localhost/greet-service-b
 Stop Service B intentionally:
 
 ```bash
-sudo systemctl stop service-b
+sudo systemctl stop driver-matching
 ```
 
 Then trigger a request to observe the failure:
 
 ```bash
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```
 
 Watch the logs in real time:
 
 ```bash
-sudo journalctl -f -u service-a -u service-b
+sudo journalctl -f -u ride-booking -u driver-matching
 ```
 
 ---
@@ -166,21 +166,21 @@ sudo journalctl -f -u service-a -u service-b
 
 ```bash
 # Check if Service B is running
-sudo systemctl status service-b
+sudo systemctl status driver-matching
 
 # Read Service B logs
-sudo journalctl -u service-b -n 50 -l
+sudo journalctl -u driver-matching -n 50 -l
 
 # Read Service A error logs
-sudo journalctl -u service-a -n 20
+sudo journalctl -u ride-booking -n 20
 
 # Check port 3002
 sudo ss -tulpn | grep 3002
 
 # Restart in correct order
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 
 # Verify full chain is working again
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```

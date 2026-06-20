@@ -13,13 +13,13 @@ Service B is a dependency of Service A. Stopping it simulates a real-world situa
 ### How to stop Service B
 
 ```bash
-sudo systemctl stop service-b
+sudo systemctl stop driver-matching
 ```
 
 ### Verify it is stopped
 
 ```bash
-sudo systemctl status service-b
+sudo systemctl status driver-matching
 ```
 
 Expected output shows `Active: inactive (dead)`.
@@ -35,7 +35,7 @@ Nothing should be returned.
 ### Trigger a request to observe the failure
 
 ```bash
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```
 
 Expected response:
@@ -44,7 +44,7 @@ Expected response:
 {
   "request_id": "<uuid>",
   "status": "error",
-  "message": "Failed to reach service-b"
+  "message": "Failed to reach driver-matching"
 }
 ```
 
@@ -53,7 +53,7 @@ Expected response:
 Open a second terminal and follow the logs before sending the request:
 
 ```bash
-sudo journalctl -f -u service-a -u service-b -u service-c
+sudo journalctl -f -u ride-booking -u driver-matching -u ride-dispatch
 ```
 
 You will see Service A log a `request_failed` event. Service B produces no logs because it never received the request.
@@ -63,15 +63,15 @@ You will see Service A log a `request_failed` event. Service B produces no logs 
 Restart in dependency order — B before A:
 
 ```bash
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 ```
 
 Verify recovery:
 
 ```bash
-sudo systemctl status service-b service-a
-curl -s http://localhost/greet-service-b
+sudo systemctl status driver-matching ride-booking
+curl -s http://localhost/greet-driver-matching
 ```
 
 ---
@@ -107,13 +107,13 @@ If this fails, Service A is down. That is the cause of the 502.
 **Step 3 — Check Service A's status**
 
 ```bash
-sudo systemctl status service-a
+sudo systemctl status ride-booking
 ```
 
 **Step 4 — Read Service A's logs**
 
 ```bash
-sudo journalctl -u service-a -n 50 -l
+sudo journalctl -u ride-booking -n 50 -l
 ```
 
 Look for crash errors, Python tracebacks, or connection failures.
@@ -123,8 +123,8 @@ Look for crash errors, Python tracebacks, or connection failures.
 Service A requires Service B and Service C. If either is down, Service A may have failed to start.
 
 ```bash
-sudo systemctl status service-b
-sudo systemctl status service-c
+sudo systemctl status driver-matching
+sudo systemctl status ride-dispatch
 ```
 
 **Step 6 — Check Nginx configuration**
@@ -139,9 +139,9 @@ Confirm it is pointing to `127.0.0.1:3001`.
 ### Recovery
 
 ```bash
-sudo systemctl restart service-c
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart ride-dispatch
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 sudo systemctl reload nginx
 ```
 
@@ -161,7 +161,7 @@ Services call each other using names like `http://service-b.internal:3002`. If t
 
 Symptoms:
 
-- `curl http://localhost/greet-service-b` returns a 500 error
+- `curl http://localhost/greet-driver-matching` returns a 500 error
 - Service A logs show a connection error to `service-b.internal`
 - `getent hosts service-b.internal` returns nothing
 
@@ -235,15 +235,15 @@ echo '127.0.0.1   service-c.internal' | sudo tee -a /etc/hosts
 **Step 6 — Restart services after fixing hosts**
 
 ```bash
-sudo systemctl restart service-c
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart ride-dispatch
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 ```
 
 **Step 7 — Verify the full chain**
 
 ```bash
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```
 
 ---
@@ -264,7 +264,7 @@ Service A will fail to start if:
 **Step 1 — Check Service A's status**
 
 ```bash
-sudo systemctl status service-a
+sudo systemctl status ride-booking
 ```
 
 Look for `Active: failed` or `Active: activating` stuck indefinitely.
@@ -272,7 +272,7 @@ Look for `Active: failed` or `Active: activating` stuck indefinitely.
 **Step 2 — Read the full error from the logs**
 
 ```bash
-sudo journalctl -u service-a -n 50 -l
+sudo journalctl -u ride-booking -n 50 -l
 ```
 
 Common log messages and what they mean:
@@ -288,8 +288,8 @@ Common log messages and what they mean:
 **Step 3 — Check the dependencies first**
 
 ```bash
-sudo systemctl status service-b
-sudo systemctl status service-c
+sudo systemctl status driver-matching
+sudo systemctl status ride-dispatch
 ```
 
 Service A will not start if either of these is down. Fix the dependency before trying to start A.
@@ -297,13 +297,13 @@ Service A will not start if either of these is down. Fix the dependency before t
 **Step 4 — Check the service file paths**
 
 ```bash
-sudo systemctl cat service-a
+sudo systemctl cat ride-booking
 ```
 
 Verify that:
 
 - `User=` matches your actual Linux username
-- `WorkingDirectory=` points to the correct `services/service-a` folder
+- `WorkingDirectory=` points to the correct `services/ride-booking` folder
 - `ExecStart=` points to the correct `venv/bin/uvicorn`
 
 **Step 5 — Check the port is free**
@@ -335,17 +335,17 @@ venv/bin/pip install -r requirements.txt
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart service-c
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart ride-dispatch
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 ```
 
 **Step 8 — Verify**
 
 ```bash
-sudo systemctl status service-a
+sudo systemctl status ride-booking
 curl -s http://localhost/health
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```
 
 ---
@@ -354,15 +354,15 @@ curl -s http://localhost/greet-service-b
 
 ```bash
 # Check all service statuses at once
-sudo systemctl status service-a service-b service-c nginx
+sudo systemctl status ride-booking driver-matching ride-dispatch nginx
 
 # Read logs for each service
-sudo journalctl -u service-a -n 50 -l
-sudo journalctl -u service-b -n 50 -l
-sudo journalctl -u service-c -n 50 -l
+sudo journalctl -u ride-booking -n 50 -l
+sudo journalctl -u driver-matching -n 50 -l
+sudo journalctl -u ride-dispatch -n 50 -l
 
 # Follow live logs across all services
-sudo journalctl -f -u service-a -u service-b -u service-c
+sudo journalctl -f -u ride-booking -u driver-matching -u ride-dispatch
 
 # Check ports
 sudo ss -tulpn | grep -E '80|3001|3002|3003'
@@ -377,12 +377,12 @@ sudo nginx -t
 sudo nginx -T | grep proxy_pass
 
 # Restart everything in correct order
-sudo systemctl restart service-c
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart ride-dispatch
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 sudo systemctl reload nginx
 
 # Verify full chain
 curl -s http://localhost/health
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```

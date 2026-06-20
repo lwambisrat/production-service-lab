@@ -19,14 +19,14 @@ Each service has a unit file installed at `/etc/systemd/system/`:
 
 | File | Service |
 | ---- | ------- |
-| `service-a.service` | Ride Booking API (port 3001) |
-| `service-b.service` | Driver Matching Service (port 3002) |
-| `service-c.service` | Ride Dispatch Service (port 3003) |
+| `ride-booking.service` | Ride Booking API (port 3001) |
+| `driver-matching.service` | Driver Matching Service (port 3002) |
+| `ride-dispatch.service` | Ride Dispatch Service (port 3003) |
 
 View a service file:
 
 ```bash
-sudo systemctl cat service-a
+sudo systemctl cat ride-booking
 ```
 
 ---
@@ -38,8 +38,8 @@ Service A depends on both Service B and Service C.
 The service file enforces this:
 
 ```ini
-After=network.target service-b.service service-c.service
-Requires=service-b.service service-c.service
+After=network.target driver-matching.service ride-dispatch.service
+Requires=driver-matching.service ride-dispatch.service
 ```
 
 - `After` — Service A will not start until B and C have started
@@ -49,9 +49,9 @@ This means services must always be started in dependency order:
 
 ```bash
 # Correct order
-sudo systemctl start service-c
-sudo systemctl start service-b
-sudo systemctl start service-a
+sudo systemctl start ride-dispatch
+sudo systemctl start driver-matching
+sudo systemctl start ride-booking
 ```
 
 ---
@@ -66,7 +66,7 @@ If Service B is stopped while the system is running:
 
 If Service B is down at boot time:
 
-- Systemd will refuse to start Service A because `Requires=service-b.service` is not satisfied
+- Systemd will refuse to start Service A because `Requires=driver-matching.service` is not satisfied
 
 ---
 
@@ -75,24 +75,24 @@ If Service B is down at boot time:
 ### Check service status
 
 ```bash
-sudo systemctl status service-a
-sudo systemctl status service-b
-sudo systemctl status service-c
+sudo systemctl status ride-booking
+sudo systemctl status driver-matching
+sudo systemctl status ride-dispatch
 sudo systemctl status nginx
 ```
 
 ### Start services
 
 ```bash
-sudo systemctl start service-c
-sudo systemctl start service-b
-sudo systemctl start service-a
+sudo systemctl start ride-dispatch
+sudo systemctl start driver-matching
+sudo systemctl start ride-booking
 ```
 
 ### Stop services
 
 ```bash
-sudo systemctl stop service-a service-b service-c
+sudo systemctl stop ride-booking driver-matching ride-dispatch
 ```
 
 ### Restart services
@@ -100,21 +100,21 @@ sudo systemctl stop service-a service-b service-c
 Always restart in dependency order:
 
 ```bash
-sudo systemctl restart service-c
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart ride-dispatch
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 ```
 
 ### Enable services to start on boot
 
 ```bash
-sudo systemctl enable service-a service-b service-c nginx
+sudo systemctl enable ride-booking driver-matching ride-dispatch nginx
 ```
 
 ### Disable services from starting on boot
 
 ```bash
-sudo systemctl disable service-a
+sudo systemctl disable ride-booking
 ```
 
 ### Reload systemd after editing a service file
@@ -132,27 +132,27 @@ Systemd collects all service output through `journalctl`.
 ### View recent logs for a service
 
 ```bash
-sudo journalctl -u service-a -n 50
-sudo journalctl -u service-b -n 50
-sudo journalctl -u service-c -n 50
+sudo journalctl -u ride-booking -n 50
+sudo journalctl -u driver-matching -n 50
+sudo journalctl -u ride-dispatch -n 50
 ```
 
 ### Follow logs live across all services
 
 ```bash
-sudo journalctl -f -u service-a -u service-b -u service-c
+sudo journalctl -f -u ride-booking -u driver-matching -u ride-dispatch
 ```
 
 ### View full log with no truncation
 
 ```bash
-sudo journalctl -u service-a -n 50 -l
+sudo journalctl -u ride-booking -n 50 -l
 ```
 
 ### View logs since last boot
 
 ```bash
-sudo journalctl -u service-a -b
+sudo journalctl -u ride-booking -b
 ```
 
 ### View system-level errors
@@ -168,7 +168,7 @@ sudo journalctl -xe
 ### Step 1 — Check the service status
 
 ```bash
-sudo systemctl status service-a
+sudo systemctl status ride-booking
 ```
 
 Look for `Active: failed` or `Active: inactive`.
@@ -176,7 +176,7 @@ Look for `Active: failed` or `Active: inactive`.
 ### Step 2 — Read the logs
 
 ```bash
-sudo journalctl -u service-a -n 50 -l
+sudo journalctl -u ride-booking -n 50 -l
 ```
 
 Common causes:
@@ -194,24 +194,24 @@ Common causes:
 If Service A fails, check B and C before investigating A:
 
 ```bash
-sudo systemctl status service-b
-sudo systemctl status service-c
+sudo systemctl status driver-matching
+sudo systemctl status ride-dispatch
 ```
 
 ### Step 4 — Fix and restart in order
 
 ```bash
-sudo systemctl restart service-c
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart ride-dispatch
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 ```
 
 ### Step 5 — Verify
 
 ```bash
-sudo systemctl status service-a service-b service-c nginx
+sudo systemctl status ride-booking driver-matching ride-dispatch nginx
 curl -s http://localhost/health
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```
 
 ---
@@ -229,7 +229,7 @@ sudo reboot
 After the system comes back:
 
 ```bash
-sudo systemctl status service-a service-b service-c nginx
+sudo systemctl status ride-booking driver-matching ride-dispatch nginx
 curl -s http://localhost/health
 ```
 

@@ -35,7 +35,7 @@ Service A Callback
 
 The client sends:
 
-GET /service-a/greet-service-b
+GET /ride-booking/greet-driver-matching
 
 Nginx receives this request.
 
@@ -45,11 +45,11 @@ Nginx receives this request.
 
 Nginx removes:
 
-/service-a/
+/ride-booking/
 
 and forwards to:
 
-Service A → /greet-service-b
+Service A → /greet-driver-matching
 
 ---
 

@@ -33,7 +33,7 @@ Because our service names are defined in `/etc/hosts`, they resolve locally with
 
 ## Symptoms of a Service Discovery Failure
 
-- `curl http://localhost/greet-service-b` returns a 500 or 502 error
+- `curl http://localhost/greet-driver-matching` returns a 500 or 502 error
 - Service A logs show a connection error to `service-b.internal`
 - `getent hosts service-b.internal` returns nothing
 - `ping service-b.internal` says "Name or service not known"
@@ -89,7 +89,7 @@ curl -s http://service-c.internal:3003/health
 
 If this succeeds, name resolution is working and the services are reachable by name.
 
-If this fails but `getent` returns the correct IP, the service itself may be down — check with `sudo systemctl status service-b`.
+If this fails but `getent` returns the correct IP, the service itself may be down — check with `sudo systemctl status driver-matching`.
 
 ---
 
@@ -140,9 +140,9 @@ cat /etc/hosts | grep service
 After fixing `/etc/hosts`, restart the services so they pick up the change:
 
 ```bash
-sudo systemctl restart service-c
-sudo systemctl restart service-b
-sudo systemctl restart service-a
+sudo systemctl restart ride-dispatch
+sudo systemctl restart driver-matching
+sudo systemctl restart ride-booking
 ```
 
 Always restart in dependency order — C first, then B, then A.
@@ -152,7 +152,7 @@ Always restart in dependency order — C first, then B, then A.
 ### Step 7 — Test the full chain again
 
 ```bash
-curl -s http://localhost/greet-service-b
+curl -s http://localhost/greet-driver-matching
 ```
 
 Expected response:
@@ -186,7 +186,7 @@ curl -s http://service-c.internal:3003/health
 cat /etc/nsswitch.conf | grep hosts
 
 # Check service logs for connection errors
-sudo journalctl -u service-a -n 30
+sudo journalctl -u ride-booking -n 30
 ```
 
 ---
