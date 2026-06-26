@@ -21,6 +21,49 @@ This system behaves like a small production environment where users can initiate
 
 ---
 
+## Prerequisites
+
+* An **Ubuntu VM**. This is a Linux/systemd project — it does **not** run on macOS or
+  Windows directly. On a Mac, run it inside a Linux VM such as [Lima](https://lima-vm.io/):
+  `limactl start`, then `limactl shell <vm-name>`.
+* `sudo` access. `git`, `python3`, and `curl` (the installer adds anything missing).
+* Work from a **native clone in the VM's home directory** (`~`), **not** a shared/mounted
+  folder — see [Working in the VM](#working-in-the-vm-lima--shared-folder-gotcha).
+* These services use ports **80, 3001, 3002, 3003** — make sure nothing else on the VM is
+  using them (see [port conflicts](#wrong-service-answering--ports-already-in-use)).
+
+## Quick Start
+
+```bash
+# inside the Ubuntu VM, from your home directory
+git clone https://github.com/lwambisrat/production-service-lab.git
+cd production-service-lab
+bash scripts/install.sh     # installs deps, deploys to /opt/ridelab, starts all services
+
+# confirm it's healthy and the full chain works
+bash scripts/verify.sh
+curl -s -X POST http://localhost/ride/request | python3 -m json.tool
+```
+
+`verify.sh` should end with `FAIL=0`, and the `curl` should return `"status": "accepted"`
+with a `matched_driver`. If so, you're up. For the complete scenario-by-scenario
+walkthrough, see **[docs/TESTING.md](docs/TESTING.md)**.
+
+## Documentation
+
+| Doc | What it covers |
+|-----|----------------|
+| [docs/TESTING.md](docs/TESTING.md) | Step-by-step walkthrough of every scenario (health, chain, failures, reboot, security) |
+| [docs/VALIDATION_EVIDENCE.md](docs/VALIDATION_EVIDENCE.md) | Proof pack — each claim with command, expected vs. actual, pass/fail |
+| [docs/architecture.md](docs/architecture.md) | System architecture and request flow |
+| [docs/systemd.md](docs/systemd.md) | Service lifecycle, dependency ordering, failure demos |
+| [docs/service-discovery-troubleshooting.md](docs/service-discovery-troubleshooting.md) | Name resolution / `/etc/hosts` issues |
+| [docs/driver-matching-unavailable.md](docs/driver-matching-unavailable.md) | What happens when a dependency is down |
+| [docs/failure-scenarios.md](docs/failure-scenarios.md) | Simulating and recovering from failures |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | General troubleshooting reference |
+
+---
+
 ## Scenario
 
 The platform simulates a ride booking workflow.
@@ -159,6 +202,10 @@ driver-matching and ride-dispatch are never referenced in the Nginx configuratio
 
 ### Nginx-specific health check
 
+> `install.sh` already deploys and reloads this config. The `cp` + `reload` lines
+> below are only needed for **manual setup** or after editing the config — if you
+> ran the installer, just run the `curl`.
+
 ```bash
 sudo cp nginx/production-service-lab.conf /etc/nginx/sites-available/production-service-lab
 sudo nginx -t && sudo systemctl reload nginx
@@ -238,7 +285,7 @@ curl http://<VM_PUBLIC_IP>/health
 Run the install script — it handles everything automatically:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/lwambisrat/production-service-lab.git
 cd production-service-lab
 bash scripts/install.sh
 ```
@@ -304,10 +351,10 @@ sudo systemctl status ride-booking driver-matching ride-dispatch nginx
 
 ### Nginx health check
 
+Answered by Nginx directly — no service involved. (If you ran `install.sh`, the
+config is already in place; just run the `curl`.)
+
 ```bash
-# Answered by Nginx directly — no service involved
-sudo cp nginx/production-service-lab.conf /etc/nginx/sites-available/production-service-lab
-sudo nginx -t && sudo systemctl reload nginx
 curl http://localhost/nginx-health
 ```
 
@@ -415,6 +462,10 @@ curl -s -X POST http://localhost:3001/ride/callback \
 ```bash
 bash scripts/verify.sh
 ```
+
+For a step-by-step walkthrough of **every** scenario — health, full chain,
+tracing, all failure cases, crash-restart, boot recovery, and network security —
+see the consolidated [docs/TESTING.md](docs/TESTING.md).
 
 ### Evidence pack — prove it, don't just assert it
 
@@ -553,6 +604,32 @@ cd production-service-lab
 
 This also matters at runtime: services run from `/opt/ridelab` (native disk),
 never from the shared folder, so a flaky mount can't take them down.
+
+### Wrong service answering / ports already in use
+
+Symptoms: `systemctl is-active ride-booking driver-matching ride-dispatch` shows
+`activating` (crash-looping), the journal shows `address already in use`, or
+`curl http://localhost/health` returns a **different** service than `ride-booking`.
+
+Cause: another process already owns port 3001, 3002, or 3003 — commonly a second
+lab (these ports are popular) or leftover processes from an earlier deploy. Only
+one app can run on these ports at a time.
+
+```bash
+# see exactly what owns the ports (note the cgroup/unit and PID)
+sudo ss -tulpn | grep -E ':3001|:3002|:3003'
+
+# if it's another systemd service (e.g. a different lab), stop + disable it
+sudo systemctl disable --now <that-service>
+
+# if it's a stray process not managed by systemd, kill it
+sudo pkill -f '<its command>'
+
+# then clear the crash-loop state and start this stack in order
+sudo systemctl reset-failed ride-booking driver-matching ride-dispatch
+sudo systemctl start ride-dispatch driver-matching ride-booking
+curl -s http://localhost/health    # should now report "ride-booking"
+```
 
 ### Service startup failure
 

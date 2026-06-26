@@ -122,6 +122,21 @@ async def driver_match(request: Request):
             )
 
         duration_ms = round((time.perf_counter() - started) * 1000, 1)
+
+        # ride-dispatch answered with an error status: driver was matched but the
+        # ride could not be dispatched. Propagate the failure upstream.
+        if response.status_code >= 400:
+            log_event(logger, "dispatch_failed",
+                      "Ride dispatch returned an error status",
+                      request_id, "ERROR", ride_id=ride_id, target="ride-dispatch",
+                      status=response.status_code, outcome="failure", duration_ms=duration_ms)
+            return JSONResponse(status_code=502, content={
+                "request_id": request_id,
+                "ride_id":    ride_id,
+                "status":     "error",
+                "message":    "Ride dispatch service is unavailable. Driver was matched but ride could not be dispatched.",
+            })
+
         log_event(logger, "dispatch_request_forwarded", "Dispatch request forwarded to ride-dispatch",
                   request_id, ride_id=ride_id, target="ride-dispatch", status=response.status_code,
                   outcome="success", duration_ms=duration_ms)

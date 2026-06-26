@@ -94,10 +94,25 @@ async def ride_request(request: Request):
                 json=ride_payload,
                 headers={REQUEST_ID_HEADER: request_id, RIDE_ID_HEADER: ride_id},
             )
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
+
+        # driver-matching answered but reported an error (e.g. ride-dispatch was
+        # down, so the driver was matched but the ride could not be dispatched).
+        # Do NOT tell the customer the ride was accepted — surface the failure.
+        if response.status_code >= 400:
+            log_event(logger, "ride_request_failed",
+                      "Downstream returned an error status; ride not completed",
+                      request_id, "ERROR", ride_id=ride_id, target="driver-matching",
+                      status=response.status_code, outcome="failure", duration_ms=duration_ms)
+            return JSONResponse(status_code=502, content={
+                "request_id": request_id,
+                "ride_id":    ride_id,
+                "status":     "error",
+                "message":    "Ride could not be completed — a downstream service is unavailable.",
+            })
 
         result = response.json()
         matched_driver = result.get("matched_driver", {})
-        duration_ms = round((time.perf_counter() - started) * 1000, 1)
 
         log_event(logger, "ride_request_forwarded", "Ride request forwarded to driver matching",
                   request_id, ride_id=ride_id, target="driver-matching", status=response.status_code,
