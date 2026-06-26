@@ -1,21 +1,26 @@
 [Unit]
-Description=Production Lab Service B — Driver Matching Service (port 3002)
+Description=Driver Matching Service (internal, port 3002)
+Documentation=https://github.com/lwambisrat/production-service-lab
+# Wait for the network stack before starting. driver-matching has no app-level
+# dependencies of its own — ride-booking calls it.
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=YOUR_USERNAME
-Group=YOUR_USERNAME
-WorkingDirectory=YOUR_PROJECT_PATH/services/service-b
+# Dedicated, unprivileged system account (no login, no home). Created by install.sh.
+User=ridelab
+Group=ridelab
+WorkingDirectory=/opt/ridelab/services/driver-matching
 
+# All config via environment — nothing hardcoded in the app.
 Environment=BIND_HOST=127.0.0.1
 Environment=SERVICE_PORT=3002
-Environment=DISPATCH_URL=http://service-c.internal:3003/ride/dispatch
+Environment=DISPATCH_URL=http://ride-dispatch.internal:3003/ride/dispatch
 Environment=DOWNSTREAM_TIMEOUT=5
-Environment=PYTHONPATH=YOUR_PROJECT_PATH/services
+Environment=PYTHONPATH=/opt/ridelab/services
 
-ExecStart=YOUR_PROJECT_PATH/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3002
+ExecStart=/opt/ridelab/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3002
 
 Restart=on-failure
 RestartSec=2

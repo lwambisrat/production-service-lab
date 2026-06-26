@@ -8,7 +8,7 @@ This means:
 
 - Services start automatically on boot
 - Services restart automatically if they crash
-- Service A will not start before Service B and Service C are ready
+- ride-booking will not start before driver-matching and ride-dispatch are ready
 - Logs are collected and accessible through `journalctl`
 
 ---
@@ -33,17 +33,21 @@ sudo systemctl cat ride-booking
 
 ## Dependency Management
 
-Service A depends on both Service B and Service C.
+ride-booking depends on both driver-matching and ride-dispatch.
 
 The service file enforces this:
 
 ```ini
-After=network.target driver-matching.service ride-dispatch.service
-Requires=driver-matching.service ride-dispatch.service
+After=network-online.target driver-matching.service ride-dispatch.service
+Wants=network-online.target driver-matching.service ride-dispatch.service
+ExecStartPre=/opt/ridelab/scripts/wait-for-deps.sh
 ```
 
-- `After` — Service A will not start until B and C have started
-- `Requires` — if B or C fail, Service A will also stop
+- `After` — ride-booking is ordered to start after driver-matching and ride-dispatch
+- `Wants` — driver-matching and ride-dispatch are pulled in as soft dependencies (weaker than `Requires`)
+- `ExecStartPre` — the `wait-for-deps.sh` readiness gate blocks A's startup
+  until driver-matching and ride-dispatch actually answer `/health`, since `After=` only guarantees the
+  processes launched, not that they are ready
 
 This means services must always be started in dependency order:
 
@@ -58,15 +62,15 @@ sudo systemctl start ride-booking
 
 ## What Happens if a Dependency Goes Down
 
-If Service B is stopped while the system is running:
+If driver-matching is stopped while the system is running:
 
-1. Service A keeps running but cannot complete requests
-2. Requests to Service A return a 500 error
-3. Service A logs show a connection failure to `service-b.internal`
+1. ride-booking keeps running but cannot complete requests
+2. Requests to ride-booking return a 502 error
+3. ride-booking logs a `driver_matching_unreachable` event for `driver-matching.internal`
 
-If Service B is down at boot time:
+If driver-matching is down at boot time:
 
-- Systemd will refuse to start Service A because `Requires=driver-matching.service` is not satisfied
+- The `wait-for-deps.sh` readiness gate times out, so ride-booking fails to start until driver-matching is healthy
 
 ---
 
@@ -191,7 +195,7 @@ Common causes:
 
 ### Step 3 — Check dependencies first
 
-If Service A fails, check B and C before investigating A:
+If ride-booking fails, check driver-matching and ride-dispatch before investigating ride-booking:
 
 ```bash
 sudo systemctl status driver-matching
@@ -211,7 +215,7 @@ sudo systemctl restart ride-booking
 ```bash
 sudo systemctl status ride-booking driver-matching ride-dispatch nginx
 curl -s http://localhost/health
-curl -s http://localhost/greet-driver-matching
+curl -s -X POST http://localhost/ride/request
 ```
 
 ---

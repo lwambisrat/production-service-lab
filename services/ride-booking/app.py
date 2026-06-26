@@ -1,16 +1,18 @@
 """
-Service A — Ride Booking API (port 3001).
+Ride Booking API (port 3001).
 
 Public entrypoint for the ride booking system. All external traffic
 enters here through Nginx. Responsible for:
   - Accepting ride requests from users
-  - Forwarding to Service B (Driver Matching) for processing
-  - Receiving the dispatch callback from Service C
+  - Forwarding to the driver-matching service for processing
+  - Receiving the dispatch callback from the ride-dispatch service
   - Logging all activity with a shared request_id for tracing
 """
 
 import os
+import time
 import uuid
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
@@ -21,17 +23,32 @@ from common.logging_setup import get_logger, log_event
 # ---------------------------------------------------------------------------
 # Configuration — all via environment, nothing hardcoded
 # ---------------------------------------------------------------------------
-SERVICE_NAME = "service-a"
+SERVICE_NAME = "ride-booking"
 BIND_HOST    = os.getenv("BIND_HOST", "127.0.0.1")
 SERVICE_PORT = int(os.getenv("SERVICE_PORT", "3001"))
-DRIVER_MATCHING_URL  = os.getenv("DRIVER_MATCHING_URL", "http://service-b.internal:3002/driver/match")
+DRIVER_MATCHING_URL  = os.getenv("DRIVER_MATCHING_URL", "http://driver-matching.internal:3002/driver/match")
 DOWNSTREAM_TIMEOUT   = float(os.getenv("DOWNSTREAM_TIMEOUT", "5"))
 
+REQUEST_ID_HEADER = "X-Request-ID"   # random per-request trace id
+RIDE_ID_HEADER    = "X-Ride-ID"      # business id (one per ride), propagated end to end
+
 logger = get_logger(SERVICE_NAME)
-app    = FastAPI(title="Service A — Ride Booking API")
 
 log_event(logger, "service_starting", f"{SERVICE_NAME} starting on {BIND_HOST}:{SERVICE_PORT}",
           request_id="startup", target=DRIVER_MATCHING_URL)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Log a structured event when the service becomes ready and when it shuts down."""
+    log_event(logger, "service_started", f"{SERVICE_NAME} ready on {BIND_HOST}:{SERVICE_PORT}",
+              request_id="startup")
+    yield
+    log_event(logger, "service_stopping", f"{SERVICE_NAME} shutting down — no longer accepting requests",
+              request_id="shutdown")
+
+
+app = FastAPI(title="Ride Booking API", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -45,38 +62,53 @@ def health():
 @app.post("/ride/request")
 async def ride_request(request: Request):
     """Accept a ride request and forward to driver matching."""
-    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
+    # Business id: reuse a client-supplied one, else mint a fresh ride id here
+    # (this is the front door). It rides alongside request_id on every hop.
+    ride_id    = request.headers.get(RIDE_ID_HEADER) or f"RIDE-{uuid.uuid4().hex[:6].upper()}"
+    started    = time.perf_counter()
+
+    # Originating client IP — prefer Nginx-forwarded headers, fall back to the
+    # direct socket peer. Lets us trace which client started each ride request.
+    client_ip = (
+        request.headers.get("X-Forwarded-For")
+        or request.headers.get("X-Real-IP")
+        or (request.client.host if request.client else "unknown")
+    )
 
     ride_payload = {
-        "ride_id":  f"RIDE-{uuid.uuid4().hex[:6].upper()}",
+        "ride_id":  ride_id,
         "customer": "Lwam",
         "pickup":   {"area": "Westlands", "lat": -1.2676, "lng": 36.8108},
         "dropoff":  {"area": "CBD",       "lat": -1.2864, "lng": 36.8172},
     }
 
     log_event(logger, "ride_request_received", "Ride request received from client",
-              request_id, ride_id=ride_payload["ride_id"], customer=ride_payload["customer"])
+              request_id, ride_id=ride_id, customer=ride_payload["customer"],
+              client_ip=client_ip)
 
     try:
         async with httpx.AsyncClient(timeout=DOWNSTREAM_TIMEOUT) as client:
             response = await client.post(
                 DRIVER_MATCHING_URL,
                 json=ride_payload,
-                headers={"X-Request-ID": request_id},
+                headers={REQUEST_ID_HEADER: request_id, RIDE_ID_HEADER: ride_id},
             )
 
         result = response.json()
         matched_driver = result.get("matched_driver", {})
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
 
         log_event(logger, "ride_request_forwarded", "Ride request forwarded to driver matching",
-                  request_id, target="service-b", status=response.status_code,
-                  driver_name=matched_driver.get("driver_name"))
+                  request_id, ride_id=ride_id, target="driver-matching", status=response.status_code,
+                  driver_name=matched_driver.get("driver_name"),
+                  outcome="success", duration_ms=duration_ms)
 
         return JSONResponse(content={
             "request_id":     request_id,
             "status":         "accepted",
             "message":        "Ride request accepted. Driver matched and dispatched.",
-            "ride_id":        ride_payload["ride_id"],
+            "ride_id":        ride_id,
             "customer":       ride_payload["customer"],
             "pickup":         ride_payload["pickup"],
             "dropoff":        ride_payload["dropoff"],
@@ -84,12 +116,15 @@ async def ride_request(request: Request):
         })
 
     except Exception as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
         log_event(logger, "driver_matching_unreachable",
                   "Driver matching service is unavailable",
-                  request_id, "ERROR", target="service-b", error=str(exc))
+                  request_id, "ERROR", ride_id=ride_id, target="driver-matching",
+                  error=str(exc), outcome="failure", duration_ms=duration_ms)
 
         return JSONResponse(status_code=502, content={
             "request_id": request_id,
+            "ride_id":    ride_id,
             "status":     "error",
             "message":    "Driver matching service is unavailable. Please try again later.",
         })
@@ -97,15 +132,17 @@ async def ride_request(request: Request):
 
 @app.post("/ride/callback")
 async def ride_callback(request: Request):
-    """Receive dispatch confirmation callback from Service C."""
+    """Receive dispatch confirmation callback from the ride-dispatch service."""
     body       = await request.json()
-    request_id = body.get("request_id") or request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request_id = body.get("request_id") or request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
+    ride_id    = body.get("ride_id") or request.headers.get(RIDE_ID_HEADER)
 
-    log_event(logger, "ride_dispatch_confirmed", "Dispatch confirmation received from service-c",
+    log_event(logger, "ride_dispatch_confirmed", "Dispatch confirmation received from ride-dispatch",
               request_id,
-              ride_id=body.get("ride_id"),
+              ride_id=ride_id,
               ride_status=body.get("ride_status"),
-              assigned_driver=body.get("assigned_driver"))
+              assigned_driver=body.get("assigned_driver"),
+              outcome="ok")
 
     return {"status": "received", "message": "Dispatch confirmation acknowledged", "request_id": request_id}
 

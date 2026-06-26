@@ -7,9 +7,9 @@ This system simulates a production ride-booking platform built using microservic
 It consists of:
 
 * Nginx reverse proxy
-* Service A (Ride Booking API)
-* Service B (Driver Matching Service)
-* Service C (Ride Dispatch Service)
+* ride-booking (Ride Booking API)
+* driver-matching (Driver Matching Service)
+* ride-dispatch (Ride Dispatch Service)
 
 ---
 
@@ -19,13 +19,13 @@ Client
 ↓
 Nginx (Port 80)
 ↓
-Service A (Port 3001)
+ride-booking (Port 3001)
 ↓
-Service B (Port 3002)
+driver-matching (Port 3002)
 ↓
-Service C (Port 3003)
+ride-dispatch (Port 3003)
 ↓
-Service A Callback
+ride-booking Callback
 
 ---
 
@@ -35,32 +35,31 @@ Service A Callback
 
 The client sends:
 
-GET /ride-booking/greet-driver-matching
+POST /ride/request
 
-Nginx receives this request.
+Nginx receives this request on port 80.
 
 ---
 
 ### Step 2: Nginx Routing
 
-Nginx removes:
+Nginx forwards every path (`location /`) to ride-booking unchanged:
 
-/ride-booking/
+ride-booking → POST /ride/request
 
-and forwards to:
-
-Service A → /greet-driver-matching
+The path is not rewritten. Nginx also injects/propagates the `X-Request-ID`
+trace header. Only `/nginx-health` is answered by Nginx itself.
 
 ---
 
-### Step 3: Service A Processing
+### Step 3: ride-booking Processing
 
-Service A:
+ride-booking:
 
 * receives request
 * creates request_id if missing
 * creates ride payload
-* forwards request to Service B
+* forwards request to driver-matching
 
 Example:
 
@@ -72,9 +71,9 @@ CBD
 
 ---
 
-### Step 4: Service B Driver Matching
+### Step 4: driver-matching
 
-Service B:
+driver-matching:
 
 * reads ride request
 * checks available drivers
@@ -94,19 +93,19 @@ ETA:
 
 ---
 
-### Step 5: Service C Dispatch
+### Step 5: ride-dispatch
 
-Service C:
+ride-dispatch:
 
 * receives matched driver
 * dispatches ride
-* sends callback to Service A
+* sends callback to ride-booking
 
 ---
 
-### Step 6: Service A Callback
+### Step 6: ride-booking Callback
 
-Service A confirms ride dispatch.
+ride-booking confirms ride dispatch.
 
 This completes the transaction.
 
@@ -120,9 +119,9 @@ Uses:
 
 Mappings:
 
-127.0.0.1 service-a.internal
-127.0.0.1 service-b.internal
-127.0.0.1 service-c.internal
+127.0.0.1 ride-booking.internal
+127.0.0.1 driver-matching.internal
+127.0.0.1 ride-dispatch.internal
 
 Purpose:
 
@@ -135,12 +134,12 @@ Avoid hardcoded IP addresses.
 Public:
 
 * Nginx
-* Service A only
+* ride-booking only
 
 Internal:
 
-* Service B
-* Service C
+* driver-matching
+* ride-dispatch
 
 Protection:
 
@@ -167,10 +166,10 @@ This allows tracing.
 
 Example:
 
-ride_request_received
-→ driver_matched
-→ ride_dispatched
-→ callback_received
+ride_request_received   (ride-booking)
+→ driver_matched          (driver-matching)
+→ ride_dispatch_started   (ride-dispatch)
+→ ride_dispatch_confirmed (ride-booking callback)
 
 ---
 

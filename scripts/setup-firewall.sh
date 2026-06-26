@@ -21,12 +21,12 @@ fi
 ufw allow OpenSSH
 
 # Allow Nginx — the only public-facing port
-ufw allow 80/tcp comment 'Nginx public entrypoint (Service A)'
+ufw allow 80/tcp comment 'Nginx public entrypoint (ride-booking)'
 
 # Block direct access to internal services
-ufw deny 3001/tcp comment 'Service A - internal only'
-ufw deny 3002/tcp comment 'Service B - internal only'
-ufw deny 3003/tcp comment 'Service C - internal only'
+ufw deny 3001/tcp comment 'ride-booking - internal only'
+ufw deny 3002/tcp comment 'driver-matching - internal only'
+ufw deny 3003/tcp comment 'ride-dispatch - internal only'
 
 # Default policy
 ufw default deny incoming

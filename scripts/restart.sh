@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
-sudo systemctl restart service-c service-b service-a nginx
+# Restart all services in dependency order: C → B → A, then Nginx.
+sudo systemctl restart ride-dispatch driver-matching ride-booking nginx
 sleep 3

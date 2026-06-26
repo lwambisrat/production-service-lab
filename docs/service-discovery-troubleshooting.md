@@ -4,11 +4,11 @@
 
 In this system, services do not communicate using IP addresses. Instead they use names:
 
-- `http://service-b.internal:3002`
-- `http://service-c.internal:3003`
-- `http://service-a.internal:3001`
+- `http://driver-matching.internal:3002`
+- `http://ride-dispatch.internal:3003`
+- `http://ride-booking.internal:3001`
 
-These names are resolved using `/etc/hosts`. When Service A calls `service-b.internal`, Linux looks up that name in `/etc/hosts`, finds `127.0.0.1`, and connects to Service B on port 3002.
+These names are resolved using `/etc/hosts`. When ride-booking calls `driver-matching.internal`, Linux looks up that name in `/etc/hosts`, finds `127.0.0.1`, and connects to driver-matching on port 3002.
 
 If that lookup fails, the services cannot communicate and the entire request chain breaks.
 
@@ -33,10 +33,10 @@ Because our service names are defined in `/etc/hosts`, they resolve locally with
 
 ## Symptoms of a Service Discovery Failure
 
-- `curl http://localhost/greet-driver-matching` returns a 500 or 502 error
-- Service A logs show a connection error to `service-b.internal`
-- `getent hosts service-b.internal` returns nothing
-- `ping service-b.internal` says "Name or service not known"
+- `curl -X POST http://localhost/ride/request` returns a 502 error
+- ride-booking logs a `driver_matching_unreachable` event for `driver-matching.internal`
+- `getent hosts driver-matching.internal` returns nothing
+- `ping driver-matching.internal` says "Name or service not known"
 
 ---
 
@@ -45,15 +45,15 @@ Because our service names are defined in `/etc/hosts`, they resolve locally with
 ### Step 1 — Check if the entries exist in /etc/hosts
 
 ```bash
-cat /etc/hosts | grep service
+cat /etc/hosts | grep internal
 ```
 
 Expected output:
 
 ```
-127.0.0.1   service-a.internal
-127.0.0.1   service-b.internal
-127.0.0.1   service-c.internal
+127.0.0.1   ride-booking.internal
+127.0.0.1   driver-matching.internal
+127.0.0.1   ride-dispatch.internal
 ```
 
 If any line is missing, that service name cannot be resolved.
@@ -63,17 +63,17 @@ If any line is missing, that service name cannot be resolved.
 ### Step 2 — Test name resolution directly
 
 ```bash
-getent hosts service-a.internal
-getent hosts service-b.internal
-getent hosts service-c.internal
+getent hosts ride-booking.internal
+getent hosts driver-matching.internal
+getent hosts ride-dispatch.internal
 ```
 
 Each should return:
 
 ```
-127.0.0.1       service-a.internal
-127.0.0.1       service-b.internal
-127.0.0.1       service-c.internal
+127.0.0.1       ride-booking.internal
+127.0.0.1       driver-matching.internal
+127.0.0.1       ride-dispatch.internal
 ```
 
 If a line returns nothing, the name is not resolving even if the entry appears to exist. Check for typos in `/etc/hosts`.
@@ -83,8 +83,8 @@ If a line returns nothing, the name is not resolving even if the entry appears t
 ### Step 3 — Test connectivity using the service name
 
 ```bash
-curl -s http://service-b.internal:3002/health
-curl -s http://service-c.internal:3003/health
+curl -s http://driver-matching.internal:3002/health
+curl -s http://ride-dispatch.internal:3003/health
 ```
 
 If this succeeds, name resolution is working and the services are reachable by name.
@@ -122,15 +122,15 @@ Change `dns files` to `files dns` and save.
 If any entries are missing from `/etc/hosts`, add them:
 
 ```bash
-echo '127.0.0.1   service-a.internal' | sudo tee -a /etc/hosts
-echo '127.0.0.1   service-b.internal' | sudo tee -a /etc/hosts
-echo '127.0.0.1   service-c.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   ride-booking.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   driver-matching.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   ride-dispatch.internal' | sudo tee -a /etc/hosts
 ```
 
 Verify they were added:
 
 ```bash
-cat /etc/hosts | grep service
+cat /etc/hosts | grep internal
 ```
 
 ---
@@ -145,14 +145,14 @@ sudo systemctl restart driver-matching
 sudo systemctl restart ride-booking
 ```
 
-Always restart in dependency order — C first, then B, then A.
+Always restart in dependency order — ride-dispatch first, then driver-matching, then ride-booking.
 
 ---
 
 ### Step 7 — Test the full chain again
 
 ```bash
-curl -s http://localhost/greet-driver-matching
+curl -s -X POST http://localhost/ride/request
 ```
 
 Expected response:
@@ -160,8 +160,10 @@ Expected response:
 ```json
 {
   "request_id": "<uuid>",
-  "status": "success",
-  "message": "Request completed successfully"
+  "status": "accepted",
+  "message": "Ride request accepted. Driver matched and dispatched.",
+  "ride_id": "RIDE-A1B2C3",
+  "matched_driver": { "driver_name": "Brian", "eta_minutes": 3 }
 }
 ```
 
@@ -171,16 +173,16 @@ Expected response:
 
 ```bash
 # Check /etc/hosts entries
-cat /etc/hosts | grep service
+cat /etc/hosts | grep internal
 
 # Test name resolution
-getent hosts service-a.internal
-getent hosts service-b.internal
-getent hosts service-c.internal
+getent hosts ride-booking.internal
+getent hosts driver-matching.internal
+getent hosts ride-dispatch.internal
 
 # Test connectivity by name
-curl -s http://service-b.internal:3002/health
-curl -s http://service-c.internal:3003/health
+curl -s http://driver-matching.internal:3002/health
+curl -s http://ride-dispatch.internal:3003/health
 
 # Check resolver order
 cat /etc/nsswitch.conf | grep hosts

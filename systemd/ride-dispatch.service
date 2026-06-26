@@ -1,22 +1,26 @@
 [Unit]
-Description=Production Lab Service C — Ride Dispatch Service (port 3003)
+Description=Ride Dispatch Service (internal, port 3003)
+Documentation=https://github.com/lwambisrat/production-service-lab
+# Wait for the network stack before starting. ride-dispatch has no app-level
+# dependencies of its own — driver-matching calls it.
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=YOUR_USERNAME
-Group=YOUR_USERNAME
-WorkingDirectory=YOUR_PROJECT_PATH/services/service-c
+# Dedicated, unprivileged system account (no login, no home). Created by install.sh.
+User=ridelab
+Group=ridelab
+WorkingDirectory=/opt/ridelab/services/ride-dispatch
 
 # All config via environment — nothing hardcoded in the app
 Environment=BIND_HOST=127.0.0.1
 Environment=SERVICE_PORT=3003
-Environment=CALLBACK_URL=http://service-a.internal:3001/ride/callback
+Environment=CALLBACK_URL=http://ride-booking.internal:3001/ride/callback
 Environment=DOWNSTREAM_TIMEOUT=5
-Environment=PYTHONPATH=YOUR_PROJECT_PATH/services
+Environment=PYTHONPATH=/opt/ridelab/services
 
-ExecStart=YOUR_PROJECT_PATH/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3003
+ExecStart=/opt/ridelab/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3003
 
 Restart=on-failure
 RestartSec=2

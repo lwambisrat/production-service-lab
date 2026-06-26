@@ -1,25 +1,39 @@
 [Unit]
-Description=Production Lab Service A — Ride Booking API (port 3001)
+Description=Ride Booking API (public entrypoint, port 3001)
+Documentation=https://github.com/lwambisrat/production-service-lab
+
+# ORDERING: start ride-booking only after the network AND its two dependencies.
 After=network-online.target driver-matching.service ride-dispatch.service
+
+# DEPENDENCY: pull driver-matching and ride-dispatch in when ride-booking starts,
+# but use Wants= (soft) rather than Requires= (hard). Why: if a dependency later
+# dies, we want ride-booking to STAY UP and return a clean 502 (handled in code)
+# and recover automatically when the dependency returns — rather than being
+# force-killed too. This is the more resilient, production-style behaviour.
 Wants=network-online.target driver-matching.service ride-dispatch.service
 
 [Service]
 Type=simple
-User=YOUR_USERNAME
-Group=YOUR_USERNAME
-WorkingDirectory=YOUR_PROJECT_PATH/services/service-a
+# Runs as a dedicated, unprivileged system account (no login, no home) — not a
+# real user. Least privilege: if the service is compromised, the blast radius
+# is just this account. Created by scripts/install.sh.
+User=ridelab
+Group=ridelab
+WorkingDirectory=/opt/ridelab/services/ride-booking
 
 Environment=BIND_HOST=127.0.0.1
 Environment=SERVICE_PORT=3001
-Environment=DRIVER_MATCHING_URL=http://service-b.internal:3002/driver/match
+Environment=DRIVER_MATCHING_URL=http://driver-matching.internal:3002/driver/match
 Environment=DOWNSTREAM_TIMEOUT=5
-Environment=PYTHONPATH=YOUR_PROJECT_PATH/services
+Environment=PYTHONPATH=/opt/ridelab/services
 
-# Readiness gate — blocks until Service B and Service C answer /health.
-# systemd's After= only guarantees process launch, not application readiness.
-ExecStartPre=YOUR_PROJECT_PATH/scripts/wait-for-deps.sh
+# READINESS: After= only guarantees the dependency processes were launched, not
+# that they are listening yet. This gate blocks until driver-matching and
+# ride-dispatch answer /health — enforcing "ride-booking does not become
+# operational until its dependencies are available."
+ExecStartPre=/opt/ridelab/scripts/wait-for-deps.sh
 
-ExecStart=YOUR_PROJECT_PATH/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3001
+ExecStart=/opt/ridelab/venv/bin/uvicorn app:app --host 127.0.0.1 --port 3001
 
 Restart=on-failure
 RestartSec=2

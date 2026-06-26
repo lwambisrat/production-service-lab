@@ -10,7 +10,7 @@ Why this exists:
 Usage:
   from common.logging_setup import get_logger, log_event
 
-  logger = get_logger("service-a")
+  logger = get_logger("ride-booking")
   log_event(logger, "ride_request_received", "Ride request received", request_id, "INFO",
             ride_id="RIDE-001", customer="Lwam")
 """

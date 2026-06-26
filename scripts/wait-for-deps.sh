@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# wait-for-deps.sh — blocks until Service B and Service C are healthy.
+# wait-for-deps.sh — blocks until the driver-matching and ride-dispatch
+# services are healthy.
 #
-# Used as ExecStartPre in service-a.service.
+# Used as ExecStartPre in ride-booking.service.
 # systemd's After= only guarantees that the process started, not that
 # the application is ready to serve traffic. This script closes that gap.
 
 set -euo pipefail
 
 DEPS=(
-    "http://service-b.internal:3002/health"
-    "http://service-c.internal:3003/health"
+    "http://driver-matching.internal:3002/health"
+    "http://ride-dispatch.internal:3003/health"
 )
 TIMEOUT="${DEPS_TIMEOUT:-60}"
 elapsed=0
@@ -29,4 +30,4 @@ for url in "${DEPS[@]}"; do
     echo "  OK: $url is healthy" >&2
 done
 
-echo "All dependencies are healthy. Starting Service A." >&2
+echo "All dependencies are healthy. Starting ride-booking." >&2

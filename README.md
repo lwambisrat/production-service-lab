@@ -30,10 +30,10 @@ A customer requests a ride.
 The system:
 
 1. Receives the request via Nginx
-2. Forwards to the Ride Booking API (Service A)
-3. Matches the nearest available driver (Service B)
-4. Dispatches the ride (Service C)
-5. Sends a callback to confirm the ride back to Service A
+2. Forwards to the Ride Booking API (ride-booking)
+3. Matches the nearest available driver (driver-matching)
+4. Dispatches the ride (ride-dispatch)
+5. Sends a callback to confirm the ride back to ride-booking
 
 The system uses mock location data to simulate real-world ride matching.
 
@@ -46,9 +46,9 @@ No external APIs are required.
 | Component              | Port | Role                    |
 | ---------------------- | ---: | ----------------------- |
 | Nginx                  |   80 | Public Entry Point      |
-| Ride Booking API       | 3001 | Service A — public via Nginx only |
-| Driver Matching Service| 3002 | Service B — internal only |
-| Ride Dispatch Service  | 3003 | Service C — internal only |
+| Ride Booking API       | 3001 | ride-booking — public via Nginx only |
+| Driver Matching Service| 3002 | driver-matching — internal only |
+| Ride Dispatch Service  | 3003 | ride-dispatch — internal only |
 
 ### Request Flow
 
@@ -57,53 +57,53 @@ Client
   ↓
 Nginx (port 80)
   ↓
-Service A — Ride Booking API (port 3001)
+ride-booking — Ride Booking API (port 3001)
   ↓
-Service B — Driver Matching Service (port 3002)
+driver-matching — Driver Matching Service (port 3002)
   ↓
-Service C — Ride Dispatch Service (port 3003)
+ride-dispatch — Ride Dispatch Service (port 3003)
   ↓
-Service A — callback received
+ride-booking — callback received
 ```
 
 ### Responsibilities
 
 #### Nginx — Public Entry Point
 
-The only externally reachable component. Forwards all traffic to Service A by discovery name.
+The only externally reachable component. Forwards all traffic to ride-booking by discovery name.
 
 Endpoints:
 
 * `GET /nginx-health` — Nginx-only health check (does not touch any service)
-* `/*` — everything else is proxied to Service A
+* `/*` — everything else is proxied to ride-booking
 
-#### Service A — Ride Booking API (port 3001)
+#### ride-booking — Ride Booking API (port 3001)
 
 The only publicly accessible service. All external traffic enters here through Nginx.
 
 Endpoints:
 
 * `GET /health` — health check
-* `POST /ride/request` — initiates the full ride booking flow (A → B → C → A)
-* `POST /ride/callback` — receives the dispatch confirmation from Service C
+* `POST /ride/request` — initiates the full ride booking flow (ride-booking → driver-matching → ride-dispatch → ride-booking)
+* `POST /ride/callback` — receives the dispatch confirmation from ride-dispatch
 
-#### Service B — Driver Matching Service (port 3002)
+#### driver-matching — Driver Matching Service (port 3002)
 
-Internal only. Receives requests from Service A, matches the nearest available driver, and forwards to Service C.
-
-Endpoints:
-
-* `GET /health` — health check
-* `POST /driver/match` — matches a driver and calls Service C
-
-#### Service C — Ride Dispatch Service (port 3003)
-
-Internal only. Receives the matched driver from Service B, finalizes dispatch, and sends a callback to Service A.
+Internal only. Receives requests from ride-booking, matches the nearest available driver, and forwards to ride-dispatch.
 
 Endpoints:
 
 * `GET /health` — health check
-* `POST /ride/dispatch` — dispatches the ride and calls back to Service A
+* `POST /driver/match` — matches a driver and calls ride-dispatch
+
+#### ride-dispatch — Ride Dispatch Service (port 3003)
+
+Internal only. Receives the matched driver from driver-matching, finalizes dispatch, and sends a callback to ride-booking.
+
+Endpoints:
+
+* `GET /health` — health check
+* `POST /ride/dispatch` — dispatches the ride and calls back to ride-booking
 
 ---
 
@@ -113,15 +113,15 @@ Services communicate using names instead of IP addresses.
 
 Examples:
 
-* `http://service-b.internal:3002`
-* `http://service-c.internal:3003`
+* `http://driver-matching.internal:3002`
+* `http://ride-dispatch.internal:3003`
 
 This is implemented using `/etc/hosts` entries that map each service name to `127.0.0.1`.
 
 ```
-127.0.0.1   service-a.internal
-127.0.0.1   service-b.internal
-127.0.0.1   service-c.internal
+127.0.0.1   ride-booking.internal
+127.0.0.1   driver-matching.internal
+127.0.0.1   ride-dispatch.internal
 ```
 
 ### How name resolution works
@@ -132,15 +132,15 @@ Linux resolves hostnames by checking `/etc/nsswitch.conf`, which specifies `host
 
 ```bash
 # Check entries exist
-grep service /etc/hosts
+grep internal /etc/hosts
 
 # Test resolution for each name
-getent hosts service-a.internal
-getent hosts service-b.internal
-getent hosts service-c.internal
+getent hosts ride-booking.internal
+getent hosts driver-matching.internal
+getent hosts ride-dispatch.internal
 
 # Test connectivity
-ping -c 1 service-b.internal
+ping -c 1 driver-matching.internal
 ```
 
 If resolution fails:
@@ -153,9 +153,9 @@ If resolution fails:
 
 ## Reverse Proxy
 
-Nginx listens on port 80 and forwards all traffic to Service A at `service-a.internal:3001`.
+Nginx listens on port 80 and forwards all traffic to ride-booking at `ride-booking.internal:3001`.
 
-Service B and Service C are never referenced in the Nginx configuration and are not reachable through it.
+driver-matching and ride-dispatch are never referenced in the Nginx configuration and are not reachable through it.
 
 ### Nginx-specific health check
 
@@ -166,7 +166,7 @@ curl http://localhost/nginx-health
 # ok
 ```
 
-This is answered by Nginx itself — Service A is not involved.
+This is answered by Nginx itself — ride-booking is not involved.
 
 ### Why Nginx
 
@@ -195,7 +195,7 @@ sudo nginx -T
 
 ## Network Security
 
-Service B and Service C are protected in two ways:
+driver-matching and ride-dispatch are protected in two ways:
 
 **Layer 1 — Loopback binding**
 
@@ -245,14 +245,30 @@ bash scripts/install.sh
 
 The script:
 
-1. Installs system packages (python3, nginx, ufw, curl)
+1. Installs system packages (python3, nginx, ufw, curl, rsync)
 2. Adds `/etc/hosts` entries for service discovery
-3. Creates the Python virtual environment and installs dependencies
-4. Installs systemd service files with your username and path substituted
+3. Creates a dedicated `ridelab` system account and deploys the code to
+   `/opt/ridelab` (with its own venv), owned by that account
+4. Installs the systemd service files
 5. Configures Nginx
 6. Configures the UFW firewall
 7. Enables and starts all services
 8. Runs `verify.sh` to confirm everything is working
+
+### Deployment model
+
+The code runs from **`/opt/ridelab`**, not from the git checkout you edit in,
+and the services run as a **dedicated, unprivileged `ridelab` system account**
+(no login shell, no home directory) rather than your login user. Two reasons:
+
+* **Least privilege** — if a service is ever compromised, the blast radius is a
+  locked-down account, not your full user.
+* **Stable runtime** — `/opt/ridelab` is on native disk. Running services
+  directly out of the repo can break on a VM that mounts the repo over a shared
+  folder (e.g. Lima's virtiofs share of your Mac).
+
+To **redeploy after a code change**, just re-run `bash scripts/install.sh` — it
+re-syncs `/opt/ridelab` and restarts the services. (`install.sh` is idempotent.)
 
 ---
 
@@ -298,14 +314,14 @@ curl http://localhost/nginx-health
 ### Service health checks
 
 ```bash
-# Through Nginx (public path — hits Service A)
+# Through Nginx (public path — hits ride-booking)
 curl http://localhost/health
 ```
 
 Expected response:
 
 ```json
-{"service": "ride-booking-api", "status": "healthy", "port": 3001}
+{"service": "ride-booking", "status": "healthy", "port": 3001}
 ```
 
 ```bash
@@ -318,14 +334,14 @@ curl http://localhost:3003/health
 Expected responses:
 
 ```json
-{"service": "ride-booking-api",        "status": "healthy", "port": 3001}
-{"service": "driver-matching-service", "status": "healthy", "port": 3002}
-{"service": "ride-dispatch-service",   "status": "healthy", "port": 3003}
+{"service": "ride-booking",    "status": "healthy", "port": 3001}
+{"service": "driver-matching", "status": "healthy", "port": 3002}
+{"service": "ride-dispatch",   "status": "healthy", "port": 3003}
 ```
 
 ### Full chain test
 
-This triggers the entire A → B → C → A flow in one request:
+This triggers the entire ride-booking → driver-matching → ride-dispatch → ride-booking flow in one request:
 
 ```bash
 curl -s -X POST http://localhost/ride/request
@@ -364,13 +380,13 @@ The same `my-trace-123` will appear in the logs of all three services.
 
 ### Test each service endpoint directly
 
-**Service A — trigger ride booking:**
+**ride-booking — trigger ride booking:**
 
 ```bash
 curl -s -X POST http://localhost:3001/ride/request
 ```
 
-**Service B — trigger driver matching:**
+**driver-matching — trigger driver matching:**
 
 ```bash
 curl -s -X POST http://localhost:3002/driver/match \
@@ -378,7 +394,7 @@ curl -s -X POST http://localhost:3002/driver/match \
   -d '{"request_id": "test-123", "pickup": {"lat": -1.28, "lng": 36.82}}'
 ```
 
-**Service C — trigger ride dispatch:**
+**ride-dispatch — trigger ride dispatch:**
 
 ```bash
 curl -s -X POST http://localhost:3003/ride/dispatch \
@@ -386,7 +402,7 @@ curl -s -X POST http://localhost:3003/ride/dispatch \
   -d '{"request_id": "test-123", "driver": "Brian", "pickup": {"lat": -1.28, "lng": 36.82}}'
 ```
 
-**Service A — test callback endpoint:**
+**ride-booking — test callback endpoint:**
 
 ```bash
 curl -s -X POST http://localhost:3001/ride/callback \
@@ -400,6 +416,22 @@ curl -s -X POST http://localhost:3001/ride/callback \
 bash scripts/verify.sh
 ```
 
+### Evidence pack — prove it, don't just assert it
+
+`verify.sh` proves the system works *inside the VM*. For a complete, reviewable
+record — including the external/host checks that confirm internal services are
+**not** publicly reachable — use the evidence pack:
+
+```bash
+# Gather the inside-VM evidence (paste output into the doc)
+bash scripts/collect-evidence.sh | tee evidence-$(date +%Y%m%d).txt
+```
+
+Then fill in [docs/VALIDATION_EVIDENCE.md](docs/VALIDATION_EVIDENCE.md), which
+lists every major claim with its command, where it was run, the expected result,
+the actual result, and a pass/fail verdict. Host/external rows must be run from a
+separate machine — the script reminds you which ones.
+
 ---
 
 ## Logging
@@ -408,14 +440,33 @@ All services produce structured JSON logs.
 
 Each log entry contains:
 
-| Field        | Description                              |
-| ------------ | ---------------------------------------- |
-| `timestamp`  | ISO 8601 UTC timestamp                   |
-| `level`      | INFO, WARNING, or ERROR                  |
-| `service`    | Which service produced the log           |
-| `event`      | What happened                            |
-| `request_id` | Unique ID tying all logs for one request |
-| `message`    | Human-readable description               |
+| Field         | Description                              |
+| ------------- | ---------------------------------------- |
+| `timestamp`   | ISO 8601 UTC timestamp                   |
+| `level`       | INFO, WARNING, or ERROR                  |
+| `service`     | Which service produced the log (matches the systemd unit name) |
+| `event`       | What happened                            |
+| `request_id`  | Random per-request trace ID tying all logs for one request |
+| `ride_id`     | Business ID for the ride (`RIDE-XXXXXX`), propagated end to end via `X-Ride-ID` |
+| `message`     | Human-readable description               |
+| `outcome`     | Result of the step: `success`, `failure`, `degraded`, or `ok` |
+| `duration_ms` | Wall-clock time the downstream call took (latency), on completion/failure |
+
+Some events carry extra context. Notably, the `ride_request_received` event on
+ride-booking includes a `client_ip` field (taken from the Nginx-forwarded
+`X-Forwarded-For` / `X-Real-IP` header, falling back to the socket peer), so you
+can see which client started each ride. Nginx's own access log records the
+client IP independently — see [View Nginx logs](#view-nginx-logs) below.
+
+### Lifecycle events
+
+Each service logs `service_starting` and `service_started` on boot and
+`service_stopping` on shutdown, so a clean stop/restart is visible in the journal
+(not just an abrupt disappearance):
+
+```bash
+sudo journalctl -u ride-booking | grep -E 'service_started|service_stopping'
+```
 
 ### View logs
 
@@ -427,6 +478,19 @@ sudo journalctl -u ride-dispatch -n 50
 
 # Follow live across all three services
 sudo journalctl -f -u ride-booking -u driver-matching -u ride-dispatch
+```
+
+### View Nginx logs
+
+Nginx writes a custom access log that includes the `trace` ID, so its lines can
+be correlated with the JSON service logs above:
+
+```bash
+# Access log (includes client IP, status, trace ID, upstream, request time)
+sudo tail -f /var/log/nginx/ride-booking_access.log
+
+# Error log (502s, upstream connection failures, config issues)
+sudo tail -f /var/log/nginx/ride-booking_error.log
 ```
 
 ### Trace a specific request
@@ -441,28 +505,54 @@ sudo journalctl -u ride-booking -u driver-matching -u ride-dispatch | grep <requ
 
 ## Request Tracing
 
-Each request is assigned a `request_id` (UUID) when it enters Service A.
+Two correlation IDs flow through the whole chain:
 
-This ID is:
+* **`request_id`** (`X-Request-ID`) — a random UUID per request. Generated by
+  ride-booking if the client didn't supply one.
+* **`ride_id`** (`X-Ride-ID`) — the *business* ID for the ride (`RIDE-XXXXXX`),
+  so you can follow one customer's ride, not just one HTTP request.
 
-* Generated by Service A if not provided by the client (or passed via `X-Request-ID` header)
-* Passed to Service B via the `X-Request-ID` header
-* Passed to Service C via the `X-Request-ID` header
-* Included in the callback from Service C back to Service A
+Both are:
+
+* Passed to driver-matching, then to ride-dispatch, via headers on each hop
+* Included in the callback from ride-dispatch back to ride-booking
 * Logged by every service at every step
 
 This means a single request can be traced across all four hops:
 
 ```
-ride-booking:    ride_request_received     request_id=abc123
-driver-matching: driver_matched            request_id=abc123
-ride-dispatch:   ride_dispatch_started     request_id=abc123
-ride-booking:    callback_received         request_id=abc123
+ride-booking:    ride_request_received     request_id=abc123  ride_id=RIDE-A1B2C3
+driver-matching: driver_matched            request_id=abc123  ride_id=RIDE-A1B2C3
+ride-dispatch:   ride_dispatch_started     request_id=abc123  ride_id=RIDE-A1B2C3
+ride-booking:    ride_dispatch_confirmed   request_id=abc123  ride_id=RIDE-A1B2C3
+```
+
+To follow one ride end to end by its business ID:
+
+```bash
+sudo journalctl -u ride-booking -u driver-matching -u ride-dispatch -o cat | grep RIDE-A1B2C3
 ```
 
 ---
 
 ## Troubleshooting
+
+### Working in the VM (Lima / shared-folder gotcha)
+
+If your VM mounts this repo over a shared folder (e.g. Lima exposes your Mac at
+`/Users/...` via virtiofs), `git` inside that path uses the **Mac's** SSH/remote
+and you'll hit `Permission denied (publickey)` on clone/pull. Always work from a
+**native clone** in the VM's own home directory:
+
+```bash
+cd ~                              # leave the shared folder
+pwd                               # must show /home/<user>/..., not /Users/...
+git clone https://github.com/lwambisrat/production-service-lab.git
+cd production-service-lab
+```
+
+This also matters at runtime: services run from `/opt/ridelab` (native disk),
+never from the shared folder, so a flaky mount can't take them down.
 
 ### Service startup failure
 
@@ -479,7 +569,7 @@ Common causes:
 
 ### Service dependency failure
 
-Service A (ride-booking) requires B and C. If B or C is down, A will not start.
+ride-booking requires driver-matching and ride-dispatch. If either is down, ride-booking will not start.
 
 ```bash
 # Check which service failed
@@ -501,7 +591,7 @@ sudo nginx -t
 # Check status
 sudo systemctl status nginx
 
-# A 502 from Nginx means Service A is down
+# A 502 from Nginx means ride-booking is down
 curl -s http://localhost:3001/health
 ```
 
@@ -509,15 +599,15 @@ curl -s http://localhost:3001/health
 
 ```bash
 # Check entries exist
-grep service /etc/hosts
+grep internal /etc/hosts
 
 # Test resolution
-getent hosts service-b.internal
-getent hosts service-c.internal
+getent hosts driver-matching.internal
+getent hosts ride-dispatch.internal
 
 # Re-add if missing
-echo '127.0.0.1   service-b.internal' | sudo tee -a /etc/hosts
-echo '127.0.0.1   service-c.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   driver-matching.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   ride-dispatch.internal' | sudo tee -a /etc/hosts
 ```
 
 ### Network access failure
@@ -544,12 +634,12 @@ sudo journalctl -xe -u ride-booking
 
 ```bash
 # Test each hop manually
-curl -s http://service-b.internal:3002/health
-curl -s http://service-c.internal:3003/health
+curl -s http://driver-matching.internal:3002/health
+curl -s http://ride-dispatch.internal:3003/health
 
 # Check /etc/hosts
-getent hosts service-b.internal
-getent hosts service-c.internal
+getent hosts driver-matching.internal
+getent hosts ride-dispatch.internal
 ```
 
 ---

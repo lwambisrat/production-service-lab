@@ -4,13 +4,13 @@ This guide covers how to simulate, investigate, and recover from common failures
 
 ---
 
-## Scenario 1 — Stop Service B
+## Scenario 1 — Stop driver-matching
 
 ### Why this matters
 
-Service B is a dependency of Service A. Stopping it simulates a real-world situation where an internal service goes down while the system is running.
+driver-matching is a dependency of ride-booking. Stopping it simulates a real-world situation where an internal service goes down while the system is running.
 
-### How to stop Service B
+### How to stop driver-matching
 
 ```bash
 sudo systemctl stop driver-matching
@@ -35,16 +35,16 @@ Nothing should be returned.
 ### Trigger a request to observe the failure
 
 ```bash
-curl -s http://localhost/greet-driver-matching
+curl -s -X POST http://localhost/ride/request
 ```
 
-Expected response:
+Expected response (HTTP 502):
 
 ```json
 {
   "request_id": "<uuid>",
   "status": "error",
-  "message": "Failed to reach driver-matching"
+  "message": "Driver matching service is unavailable. Please try again later."
 }
 ```
 
@@ -56,11 +56,11 @@ Open a second terminal and follow the logs before sending the request:
 sudo journalctl -f -u ride-booking -u driver-matching -u ride-dispatch
 ```
 
-You will see Service A log a `request_failed` event. Service B produces no logs because it never received the request.
+You will see ride-booking log a `driver_matching_unreachable` event at ERROR level. driver-matching produces no logs because it never received the request.
 
 ### Recover from the failure
 
-Restart in dependency order — B before A:
+Restart in dependency order — driver-matching before ride-booking:
 
 ```bash
 sudo systemctl restart driver-matching
@@ -71,7 +71,7 @@ Verify recovery:
 
 ```bash
 sudo systemctl status driver-matching ride-booking
-curl -s http://localhost/greet-driver-matching
+curl -s -X POST http://localhost/ride/request
 ```
 
 ---
@@ -80,10 +80,10 @@ curl -s http://localhost/greet-driver-matching
 
 ### What a 502 means
 
-A 502 Bad Gateway means Nginx is running and received the request, but the service it is trying to reach (Service A) is down or not responding.
+A 502 Bad Gateway means Nginx is running and received the request, but the service it is trying to reach (ride-booking) is down or not responding.
 
 ```
-Client → Nginx ✓ → Service A ✗ → 502
+Client → Nginx ✓ → ride-booking ✗ → 502
 ```
 
 ### Step-by-step investigation
@@ -96,21 +96,21 @@ sudo systemctl status nginx
 
 If Nginx is down, that produces a different error (connection refused), not a 502.
 
-**Step 2 — Check if Service A is responding**
+**Step 2 — Check if ride-booking is responding**
 
 ```bash
 curl -s http://localhost:3001/health
 ```
 
-If this fails, Service A is down. That is the cause of the 502.
+If this fails, ride-booking is down. That is the cause of the 502.
 
-**Step 3 — Check Service A's status**
+**Step 3 — Check ride-booking's status**
 
 ```bash
 sudo systemctl status ride-booking
 ```
 
-**Step 4 — Read Service A's logs**
+**Step 4 — Read ride-booking's logs**
 
 ```bash
 sudo journalctl -u ride-booking -n 50 -l
@@ -118,9 +118,9 @@ sudo journalctl -u ride-booking -n 50 -l
 
 Look for crash errors, Python tracebacks, or connection failures.
 
-**Step 5 — Check if Service A's dependencies are up**
+**Step 5 — Check if ride-booking's dependencies are up**
 
-Service A requires Service B and Service C. If either is down, Service A may have failed to start.
+ride-booking requires driver-matching and ride-dispatch. If either is down, ride-booking may have failed to start.
 
 ```bash
 sudo systemctl status driver-matching
@@ -157,28 +157,28 @@ curl -s http://localhost/health
 
 ### What service discovery failure looks like
 
-Services call each other using names like `http://service-b.internal:3002`. If the name cannot be resolved to an IP address, the connection fails and the request chain breaks.
+Services call each other using names like `http://driver-matching.internal:3002`. If the name cannot be resolved to an IP address, the connection fails and the request chain breaks.
 
 Symptoms:
 
-- `curl http://localhost/greet-driver-matching` returns a 500 error
-- Service A logs show a connection error to `service-b.internal`
-- `getent hosts service-b.internal` returns nothing
+- `curl -X POST http://localhost/ride/request` returns a 502 error
+- ride-booking logs a `driver_matching_unreachable` event with a connection error to `driver-matching.internal`
+- `getent hosts driver-matching.internal` returns nothing
 
 ### Step-by-step investigation
 
 **Step 1 — Check the /etc/hosts entries**
 
 ```bash
-cat /etc/hosts | grep service
+cat /etc/hosts | grep internal
 ```
 
 Expected:
 
 ```
-127.0.0.1   service-a.internal
-127.0.0.1   service-b.internal
-127.0.0.1   service-c.internal
+127.0.0.1   ride-booking.internal
+127.0.0.1   driver-matching.internal
+127.0.0.1   ride-dispatch.internal
 ```
 
 If any line is missing, that service name will not resolve.
@@ -186,9 +186,9 @@ If any line is missing, that service name will not resolve.
 **Step 2 — Test name resolution directly**
 
 ```bash
-getent hosts service-a.internal
-getent hosts service-b.internal
-getent hosts service-c.internal
+getent hosts ride-booking.internal
+getent hosts driver-matching.internal
+getent hosts ride-dispatch.internal
 ```
 
 Each should return `127.0.0.1`. If a line returns nothing, the name is not resolving.
@@ -196,8 +196,8 @@ Each should return `127.0.0.1`. If a line returns nothing, the name is not resol
 **Step 3 — Test connectivity by name**
 
 ```bash
-curl -s http://service-b.internal:3002/health
-curl -s http://service-c.internal:3003/health
+curl -s http://driver-matching.internal:3002/health
+curl -s http://ride-dispatch.internal:3003/health
 ```
 
 If this works but services still cannot communicate, the problem is in the service code, not discovery.
@@ -227,9 +227,9 @@ sudo nano /etc/nsswitch.conf
 **Step 5 — Re-add missing entries**
 
 ```bash
-echo '127.0.0.1   service-a.internal' | sudo tee -a /etc/hosts
-echo '127.0.0.1   service-b.internal' | sudo tee -a /etc/hosts
-echo '127.0.0.1   service-c.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   ride-booking.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   driver-matching.internal' | sudo tee -a /etc/hosts
+echo '127.0.0.1   ride-dispatch.internal' | sudo tee -a /etc/hosts
 ```
 
 **Step 6 — Restart services after fixing hosts**
@@ -243,25 +243,25 @@ sudo systemctl restart ride-booking
 **Step 7 — Verify the full chain**
 
 ```bash
-curl -s http://localhost/greet-driver-matching
+curl -s -X POST http://localhost/ride/request
 ```
 
 ---
 
-## Scenario 4 — Investigate a Failed Service A Startup
+## Scenario 4 — Investigate a Failed ride-booking Startup
 
 ### What happens
 
-Service A will fail to start if:
+ride-booking will fail to start if:
 
-- Service B or Service C is not running (systemd dependency enforcement)
+- driver-matching or ride-dispatch is not running (systemd dependency enforcement)
 - The virtual environment path is wrong
 - The working directory does not exist
 - A Python error prevents the process from starting
 
 ### Step-by-step investigation
 
-**Step 1 — Check Service A's status**
+**Step 1 — Check ride-booking's status**
 
 ```bash
 sudo systemctl status ride-booking
@@ -279,7 +279,7 @@ Common log messages and what they mean:
 
 | Log message | Cause |
 | ----------- | ----- |
-| `Dependency failed` | Service B or C is not running |
+| `Dependency failed` | driver-matching is not running |
 | `No such file or directory` | Wrong path in WorkingDirectory or ExecStart |
 | `Failed to execute` | venv not created or uvicorn not installed |
 | `Address already in use` | Port 3001 is occupied by another process |
@@ -292,7 +292,7 @@ sudo systemctl status driver-matching
 sudo systemctl status ride-dispatch
 ```
 
-Service A will not start if either of these is down. Fix the dependency before trying to start A.
+ride-booking will not start if either of these is down. Fix the dependency before trying to start ride-booking.
 
 **Step 4 — Check the service file paths**
 
@@ -302,9 +302,9 @@ sudo systemctl cat ride-booking
 
 Verify that:
 
-- `User=` matches your actual Linux username
-- `WorkingDirectory=` points to the correct `services/ride-booking` folder
-- `ExecStart=` points to the correct `venv/bin/uvicorn`
+- `User=` is the dedicated service account `ridelab`
+- `WorkingDirectory=` points to `/opt/ridelab/services/ride-booking`
+- `ExecStart=` points to `/opt/ridelab/venv/bin/uvicorn`
 
 **Step 5 — Check the port is free**
 
@@ -318,17 +318,17 @@ If something else is using port 3001:
 sudo pkill -f uvicorn
 ```
 
-**Step 6 — Check the venv exists**
+**Step 6 — Check the deployed venv exists**
 
 ```bash
-ls /path/to/production-service-lab/venv/bin/uvicorn
+ls /opt/ridelab/venv/bin/uvicorn
 ```
 
-If the file does not exist, recreate the venv:
+If the file does not exist, the deploy is incomplete — just re-run the
+installer, which recreates `/opt/ridelab` (code + venv) and restarts everything:
 
 ```bash
-python3 -m venv venv
-venv/bin/pip install -r requirements.txt
+bash scripts/install.sh
 ```
 
 **Step 7 — Reload and restart in order**
@@ -345,7 +345,7 @@ sudo systemctl restart ride-booking
 ```bash
 sudo systemctl status ride-booking
 curl -s http://localhost/health
-curl -s http://localhost/greet-driver-matching
+curl -s -X POST http://localhost/ride/request
 ```
 
 ---
@@ -368,9 +368,9 @@ sudo journalctl -f -u ride-booking -u driver-matching -u ride-dispatch
 sudo ss -tulpn | grep -E '80|3001|3002|3003'
 
 # Check service discovery
-cat /etc/hosts | grep service
-getent hosts service-b.internal
-getent hosts service-c.internal
+cat /etc/hosts | grep internal
+getent hosts driver-matching.internal
+getent hosts ride-dispatch.internal
 
 # Check Nginx
 sudo nginx -t
@@ -384,5 +384,5 @@ sudo systemctl reload nginx
 
 # Verify full chain
 curl -s http://localhost/health
-curl -s http://localhost/greet-driver-matching
+curl -s -X POST http://localhost/ride/request
 ```

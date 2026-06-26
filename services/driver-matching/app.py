@@ -1,8 +1,9 @@
 """
-Service B — Driver Matching Service (port 3002).
+Driver Matching Service (port 3002).
 
-Internal service. Receives ride requests from Service A, matches
-the nearest available driver, and forwards to Service C for dispatch.
+Internal service. Receives ride requests from the ride-booking service,
+matches the nearest available driver, and forwards to the ride-dispatch
+service for dispatch.
 
 Responsibilities:
   - GET  /health        — liveness probe
@@ -11,7 +12,9 @@ Responsibilities:
 
 import math
 import os
+import time
 import uuid
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
@@ -22,11 +25,14 @@ from common.logging_setup import get_logger, log_event
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SERVICE_NAME  = "service-b"
+SERVICE_NAME  = "driver-matching"
 BIND_HOST     = os.getenv("BIND_HOST", "127.0.0.1")
 SERVICE_PORT  = int(os.getenv("SERVICE_PORT", "3002"))
-DISPATCH_URL  = os.getenv("DISPATCH_URL", "http://service-c.internal:3003/ride/dispatch")
+DISPATCH_URL  = os.getenv("DISPATCH_URL", "http://ride-dispatch.internal:3003/ride/dispatch")
 DOWNSTREAM_TIMEOUT = float(os.getenv("DOWNSTREAM_TIMEOUT", "5"))
+
+REQUEST_ID_HEADER = "X-Request-ID"   # random per-request trace id
+RIDE_ID_HEADER    = "X-Ride-ID"      # business id, propagated end to end
 
 MOCK_DRIVERS = [
     {"driver_id": "DRV-101", "name": "Brian", "area": "Westlands", "lat": -1.2650, "lng": 36.8120},
@@ -35,10 +41,22 @@ MOCK_DRIVERS = [
 ]
 
 logger = get_logger(SERVICE_NAME)
-app    = FastAPI(title="Service B — Driver Matching Service")
 
 log_event(logger, "service_starting", f"{SERVICE_NAME} starting on {BIND_HOST}:{SERVICE_PORT}",
           request_id="startup", target=DISPATCH_URL)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Log a structured event when the service becomes ready and when it shuts down."""
+    log_event(logger, "service_started", f"{SERVICE_NAME} ready on {BIND_HOST}:{SERVICE_PORT}",
+              request_id="startup")
+    yield
+    log_event(logger, "service_stopping", f"{SERVICE_NAME} shutting down — no longer accepting requests",
+              request_id="shutdown")
+
+
+app = FastAPI(title="Driver Matching Service", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,10 +78,12 @@ def health():
 async def driver_match(request: Request):
     """Match the nearest available driver and forward to ride dispatch."""
     body       = await request.json()
-    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
+    ride_id    = request.headers.get(RIDE_ID_HEADER) or body.get("ride_id")
+    started    = time.perf_counter()
 
     log_event(logger, "driver_matching_started", "Driver matching started",
-              request_id, ride_id=body.get("ride_id"), customer=body.get("customer"))
+              request_id, ride_id=ride_id, customer=body.get("customer"))
 
     pickup = body.get("pickup", {})
     best   = min(MOCK_DRIVERS,
@@ -79,14 +99,14 @@ async def driver_match(request: Request):
     }
 
     log_event(logger, "driver_matched", "Nearest driver matched",
-              request_id,
+              request_id, ride_id=ride_id,
               driver_id=matched_driver["driver_id"],
               driver_name=matched_driver["driver_name"],
               eta_minutes=matched_driver["eta_minutes"])
 
     dispatch_payload = {
         "request_id":    request_id,
-        "ride_id":       body.get("ride_id"),
+        "ride_id":       ride_id,
         "customer":      body.get("customer"),
         "pickup":        body.get("pickup"),
         "dropoff":       body.get("dropoff"),
@@ -98,25 +118,31 @@ async def driver_match(request: Request):
             response = await client.post(
                 DISPATCH_URL,
                 json=dispatch_payload,
-                headers={"X-Request-ID": request_id},
+                headers={REQUEST_ID_HEADER: request_id, RIDE_ID_HEADER: ride_id or ""},
             )
 
-        log_event(logger, "dispatch_request_forwarded", "Dispatch request forwarded to service-c",
-                  request_id, target="service-c", status=response.status_code)
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
+        log_event(logger, "dispatch_request_forwarded", "Dispatch request forwarded to ride-dispatch",
+                  request_id, ride_id=ride_id, target="ride-dispatch", status=response.status_code,
+                  outcome="success", duration_ms=duration_ms)
 
         return JSONResponse(content={
             "request_id":    request_id,
+            "ride_id":       ride_id,
             "status":        "driver_matched",
             "matched_driver": matched_driver,
         })
 
     except Exception as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
         log_event(logger, "dispatch_service_unreachable",
                   "Ride dispatch service is unavailable",
-                  request_id, "ERROR", target="service-c", error=str(exc))
+                  request_id, "ERROR", ride_id=ride_id, target="ride-dispatch",
+                  error=str(exc), outcome="failure", duration_ms=duration_ms)
 
         return JSONResponse(status_code=502, content={
             "request_id": request_id,
+            "ride_id":    ride_id,
             "status":     "error",
             "message":    "Ride dispatch service is unavailable. Driver was matched but ride could not be dispatched.",
         })

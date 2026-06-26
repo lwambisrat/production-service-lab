@@ -14,7 +14,7 @@ hdr(){   printf '\n\033[1m%s\033[0m\n' "$1"; }
 # ---------------------------------------------------------------------------
 hdr "1. Service Discovery — name resolution"
 # ---------------------------------------------------------------------------
-for name in service-a.internal service-b.internal service-c.internal; do
+for name in ride-booking.internal driver-matching.internal ride-dispatch.internal; do
     ip=$(getent hosts "$name" 2>/dev/null | awk '{print $1}')
     if [ "$ip" = "127.0.0.1" ]; then
         green "$name → $ip"
@@ -60,7 +60,7 @@ hdr "4. End-to-End — full request chain through Nginx"
 response=$(curl -fsS --max-time 10 -X POST http://localhost/ride/request 2>/dev/null || true)
 if echo "$response" | grep -q '"status"'; then
     green "POST /ride/request returned a valid response"
-    note  "Response: $response"
+    echo "$response" | python3 -m json.tool 2>/dev/null | sed 's/^/        /' || note "Response: $response"
 else
     red   "POST /ride/request failed or returned unexpected response"
     note  "Response: $response"

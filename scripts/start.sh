@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-sudo systemctl start service-c service-b service-a nginx
+# Start all services in dependency order: C → B → A, then Nginx.
+sudo systemctl start ride-dispatch driver-matching ride-booking nginx

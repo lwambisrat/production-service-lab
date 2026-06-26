@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-sudo systemctl stop service-a service-b service-c nginx
+# Stop all services. ride-booking is stopped first since driver-matching and ride-dispatch are its dependencies.
+sudo systemctl stop ride-booking driver-matching ride-dispatch nginx

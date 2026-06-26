@@ -52,7 +52,7 @@ systemctl status driver-matching
 systemctl status ride-dispatch
 ```
 
-If B or C is down:
+If driver-matching or ride-dispatch is down:
 
 A may fail.
 
@@ -68,7 +68,7 @@ Check:
 
 ```bash
 cat /etc/hosts
-getent hosts service-b.internal
+getent hosts driver-matching.internal
 ```
 
 Problem:
@@ -123,8 +123,8 @@ Correct location blocks.
 Check:
 
 ```bash
-curl http://service-b.internal:3002/health
-curl http://service-c.internal:3003/health
+curl http://driver-matching.internal:3002/health
+curl http://ride-dispatch.internal:3003/health
 ```
 
 Problem:
