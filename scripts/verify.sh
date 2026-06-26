@@ -90,11 +90,17 @@ fi
 hdr "6. Firewall"
 # ---------------------------------------------------------------------------
 if command -v ufw &>/dev/null; then
-    status=$(ufw status | head -1)
-    note "UFW: $status"
-    ufw status | grep -E '3001|3002|3003|80' | while read -r line; do
-        note "  $line"
-    done
+    # ufw status needs root; use cached sudo non-interactively so verify.sh
+    # never prompts or prints "need root" when run without sudo.
+    ufw_status=$(sudo -n ufw status 2>/dev/null || true)
+    if [ -n "$ufw_status" ]; then
+        note "UFW: $(echo "$ufw_status" | head -1)"
+        echo "$ufw_status" | grep -E '3001|3002|3003|80' | while read -r line; do
+            note "  $line"
+        done
+    else
+        note "ufw present (run 'sudo ufw status verbose' to see rules)"
+    fi
 else
     note "ufw not installed"
 fi
