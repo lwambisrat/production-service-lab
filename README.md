@@ -54,7 +54,8 @@ walkthrough, see **[docs/TESTING.md](docs/TESTING.md)**.
 | Doc | What it covers |
 |-----|----------------|
 | [docs/TESTING.md](docs/TESTING.md) | Step-by-step walkthrough of every scenario (health, chain, failures, reboot, security) |
-| [docs/VALIDATION_EVIDENCE.md](docs/VALIDATION_EVIDENCE.md) | Proof pack — each claim with command, expected vs. actual, pass/fail |
+| [docs/VALIDATION_EVIDENCE.md](docs/VALIDATION_EVIDENCE.md) | Proof pack (VM) — each claim with command, expected vs. actual, pass/fail |
+| [docs/CONTAINER_VALIDATION.md](docs/CONTAINER_VALIDATION.md) | Docker Compose validation — the 7 container tests |
 | [docs/architecture.md](docs/architecture.md) | System architecture and request flow |
 | [docs/systemd.md](docs/systemd.md) | Service lifecycle, dependency ordering, failure demos |
 | [docs/service-discovery-troubleshooting.md](docs/service-discovery-troubleshooting.md) | Name resolution / `/etc/hosts` issues |
@@ -316,6 +317,74 @@ and the services run as a **dedicated, unprivileged `ridelab` system account**
 
 To **redeploy after a code change**, just re-run `bash scripts/install.sh` — it
 re-syncs `/opt/ridelab` and restarts the services. (`install.sh` is idempotent.)
+
+---
+
+## Running with Docker Compose
+
+The same flow also runs in **Docker Compose** — an alternative runtime to the
+VM/systemd setup, preserving the same production properties (Nginx is the only
+public entry point; driver-matching and ride-dispatch are internal-only; services
+discover each other by name; full A→B→C→A chain; logs and tracing work).
+
+**Prerequisite:** Docker + Docker Compose (e.g. Docker Desktop running).
+
+### Start the system
+
+```bash
+docker compose up --build -d
+docker compose ps              # nginx, ride-booking, driver-matching, ride-dispatch -> Up
+```
+
+### Test the public route
+
+```bash
+curl -s http://localhost:8080/health | python3 -m json.tool
+curl -s -X POST http://localhost:8080/ride/request | python3 -m json.tool   # -> accepted + matched_driver
+```
+
+### Prove driver-matching & ride-dispatch are internal
+
+```bash
+# from the host — these FAIL (no published port):
+curl -i --connect-timeout 3 http://localhost:3002/health
+curl -i --connect-timeout 3 http://localhost:3003/health
+
+# from inside the Compose network — these WORK (resolved by service name):
+docker compose exec ride-booking   curl -s http://driver-matching:3002/health
+docker compose exec driver-matching curl -s http://ride-dispatch:3003/health
+```
+
+### View logs
+
+```bash
+docker compose logs -f                      # all services
+docker compose logs -f ride-booking         # one service
+docker compose logs | grep <request-id>     # trace one request across services
+```
+
+### Stop / restart a service (failure + recovery)
+
+```bash
+docker compose stop driver-matching         # requests now return HTTP 502
+docker compose start driver-matching        # recovers
+```
+
+### Shut everything down
+
+```bash
+docker compose down                         # stop + remove containers (images kept)
+```
+
+Full step-by-step validation: **[docs/CONTAINER_VALIDATION.md](docs/CONTAINER_VALIDATION.md)**.
+
+> **Why these choices:** only `nginx` publishes a port (`8080:80`) — the three
+> services have no `ports:`, so they're unreachable from the host and only talk
+> over the internal Compose network. Inside containers they bind `0.0.0.0` (so
+> peers can reach them) and stay private by *not being published* — the Compose
+> equivalent of the VM's loopback binding. Each service uses
+> `restart: unless-stopped` so a crashed container comes back automatically but
+> stays down when you deliberately stop it.
 
 ---
 
