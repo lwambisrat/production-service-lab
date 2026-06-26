@@ -104,12 +104,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "7/7  Enable and start services"
+step "7/7  Enable and (re)start services"
 # ---------------------------------------------------------------------------
-sudo systemctl enable --now ride-dispatch
-sudo systemctl enable --now driver-matching
-sudo systemctl enable --now ride-booking
-sudo systemctl enable nginx
+# Enable for boot, then RESTART (not 'enable --now') so re-running the installer
+# actually picks up freshly-deployed code — 'enable --now' is a no-op on an
+# already-running service and would leave the old code in memory.
+# Restart in dependency order: ride-dispatch -> driver-matching -> ride-booking.
+sudo systemctl enable ride-dispatch driver-matching ride-booking nginx
+sudo systemctl restart ride-dispatch driver-matching ride-booking
 echo "    Done."
 
 # ---------------------------------------------------------------------------
