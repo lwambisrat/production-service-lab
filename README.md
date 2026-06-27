@@ -325,7 +325,8 @@ re-syncs `/opt/ridelab` and restarts the services. (`install.sh` is idempotent.)
 The same flow also runs in **Docker Compose** — an alternative runtime to the
 VM/systemd setup, preserving the same production properties (Nginx is the only
 public entry point; driver-matching and ride-dispatch are internal-only; services
-discover each other by name; full A→B→C→A chain; logs and tracing work).
+discover each other by name; the full ride-booking → driver-matching →
+ride-dispatch → ride-booking callback flow works; logs and tracing work).
 
 **Prerequisite:** Docker + Docker Compose (e.g. Docker Desktop running).
 

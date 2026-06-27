@@ -10,8 +10,6 @@ recovers.
 Every command below was run from the repository root with the Docker daemon
 running. Screenshots provide the actual command output for each test.
 
-- **Date collected:** `2026-06-27`
-- **Commit SHA:** `9d4d54c041b0469d1d8a22e45c79d32c7fe7eae6`
 - **Public route:** `POST http://localhost:8080/ride/request`
 
 ---
