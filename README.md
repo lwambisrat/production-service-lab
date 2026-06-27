@@ -330,6 +330,23 @@ ride-dispatch → ride-booking callback flow works; logs and tracing work).
 
 **Prerequisite:** Docker + Docker Compose (e.g. Docker Desktop running).
 
+### Container files
+
+- [`docker-compose.yml`](docker-compose.yml) defines Nginx and the three
+  application services, their restart policies, environment variables, startup
+  commands, and private Compose network. Only Nginx publishes a host port.
+- [`Dockerfile`](Dockerfile) is shared by ride-booking, driver-matching, and
+  ride-dispatch because all three are Python/Uvicorn services with the same
+  dependencies and source layout. Compose selects the correct service by
+  overriding the working directory, command, and port.
+- [`nginx/compose.conf`](nginx/compose.conf) routes public traffic only to
+  ride-booking using its Compose DNS name and sends Nginx logs to stdout/stderr.
+- [`.dockerignore`](.dockerignore) keeps Git data, virtual environments, caches,
+  logs, VM files, and other development-only content out of the image build
+  context.
+- [`docs/CONTAINER_VALIDATION.md`](docs/CONTAINER_VALIDATION.md) records the
+  seven required runtime tests and their screenshot evidence.
+
 ### Start the system
 
 ```bash
