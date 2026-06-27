@@ -7,12 +7,11 @@ the full chain + callback work, logs are visible via `docker compose logs`, one
 request ID traces across services, and stopping a dependency fails cleanly and
 recovers.
 
-Run every command from the repo root with the Docker daemon running. Replace the
-`TODO` cells with your actual output (or attach screenshots) and set each result
-to **Pass** / **Fail**.
+Every command below was run from the repository root with the Docker daemon
+running. Screenshots provide the actual command output for each test.
 
-- **Date collected:** `TODO`
-- **Commit SHA:** `TODO`
+- **Date collected:** `2026-06-27`
+- **Commit SHA:** `9d4d54c041b0469d1d8a22e45c79d32c7fe7eae6`
 - **Public route:** `POST http://localhost:8080/ride/request`
 
 ---
@@ -23,7 +22,12 @@ to **Pass** / **Fail**.
 docker compose up --build -d
 ```
 Expected: images build, four containers start.
-Actual: `TODO`
+
+Actual: the shared image built successfully and all four containers started.
+
+![Compose build and startup output](screenshots/01-compose-up.png)
+
+**Result: Pass**
 
 ## 2. Confirm containers are running
 
@@ -31,7 +35,12 @@ Actual: `TODO`
 docker compose ps
 ```
 Expected: `nginx`, `ride-booking`, `driver-matching`, `ride-dispatch` all `running` (Up).
-Actual: `TODO`  — Result: **TODO**
+
+Actual: all four containers report an `Up` status.
+
+![All four Compose containers running](screenshots/02-compose-ps.png)
+
+**Result: Pass**
 
 ## 3. Public entry point works
 
@@ -42,7 +51,13 @@ curl -s -X POST http://localhost:8080/ride/request | python3 -m json.tool   # fu
 ```
 Expected: `200 OK`; `/health` returns `{"service":"ride-booking",...}`; the POST
 returns `"status":"accepted"` with a `matched_driver`.
-Actual: `TODO`  — Result: **TODO**
+
+Actual: both health routes returned `200 OK`, and the ride request returned
+`"status":"accepted"` with driver `DRV-101`.
+
+![Successful public health checks and ride request](screenshots/03-public-route.png)
+
+**Result: Pass**
 
 ## 4. driver-matching and ride-dispatch are NOT directly exposed
 
@@ -51,7 +66,12 @@ curl -i --connect-timeout 3 http://localhost:3002/health   # driver-matching
 curl -i --connect-timeout 3 http://localhost:3003/health   # ride-dispatch
 ```
 Expected: connection refused / timeout — they publish no host port.
-Actual: `TODO`  — Result: **TODO**
+
+Actual: connections to host ports 3002 and 3003 were both refused.
+
+![Internal service ports refused from the host](screenshots/04-internal-ports-blocked.png)
+
+**Result: Pass**
 
 ## 5. Internal service discovery works (inside the network)
 
@@ -60,7 +80,13 @@ docker compose exec ride-booking   curl -s http://driver-matching:3002/health
 docker compose exec driver-matching curl -s http://ride-dispatch:3003/health
 ```
 Expected: `200` health JSON — services resolve each other by Compose service name.
-Actual: `TODO`  — Result: **TODO**
+
+Actual: `ride-booking` reached `driver-matching:3002`, and `driver-matching`
+reached `ride-dispatch:3003`; both returned `200 OK`.
+
+![Internal discovery using Compose service names](screenshots/05-service-discovery.png)
+
+**Result: Pass**
 
 > Note: if the `python:3.12-slim` image has no `curl`, use this instead:
 > `docker compose exec ride-booking python -c "import urllib.request,sys; print(urllib.request.urlopen('http://driver-matching:3002/health').read().decode())"`
@@ -74,7 +100,13 @@ docker compose logs | grep demo-container-001
 Expected: the same `demo-container-001` appears in ride-booking, driver-matching,
 and ride-dispatch logs (and in the Nginx access log as `trace=`), each carrying
 the same `ride_id`.
-Actual: `TODO`  — Result: **TODO**
+
+Actual: `demo-container-001` appears in Nginx, ride-booking, driver-matching,
+and ride-dispatch logs with ride ID `RIDE-784D33`.
+
+![One request ID traced through all four components](screenshots/06-request-tracing.png)
+
+**Result: Pass**
 
 ## 7. Stop driver-matching → clean failure, then recover
 
@@ -93,7 +125,15 @@ docker compose start driver-matching
 sleep 3
 curl -s -o /dev/null -w "HTTP %{http_code}\n" -X POST http://localhost:8080/ride/request  
 ```
-Actual: `TODO`  — Result: **TODO**
+
+Actual: stopping `driver-matching` produced `HTTP 502 Bad Gateway`. The
+ride-booking log recorded `driver_matching_unreachable` at `ERROR` with
+`outcome=failure`. After restarting the service, the recovery request returned
+`HTTP 200 OK` with `"status":"accepted"`.
+
+![Service B failure and successful recovery](screenshots/07-failure-recovery.png)
+
+**Result: Pass**
 
 ---
 
@@ -101,13 +141,13 @@ Actual: `TODO`  — Result: **TODO**
 
 | # | Test | Result |
 |---|------|--------|
-| 1 | System starts (`up --build`) | TODO |
-| 2 | All four containers running | TODO |
-| 3 | Public entry + full chain | TODO |
-| 4 | B/C not exposed on host | TODO |
-| 5 | Internal discovery by service name | TODO |
-| 6 | One request ID traced across services | TODO |
-| 7 | Stop-B failure (502) + recovery | TODO |
+| 1 | System starts (`up --build`) | Pass |
+| 2 | All four containers running | Pass |
+| 3 | Public entry + full chain | Pass |
+| 4 | B/C not exposed on host | Pass |
+| 5 | Internal discovery by service name | Pass |
+| 6 | One request ID traced across services | Pass |
+| 7 | Stop-B failure (502) + recovery | Pass |
 
 ## Notes on the runtime shift (VM → Compose)
 
