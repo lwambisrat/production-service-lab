@@ -23,7 +23,14 @@ services:
     volumes:
       - ./nginx/compose.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - ride-booking
+      ride-booking:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/nginx-health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped            
 
   # ---- ride-booking — the booking API (internal; reached only via Nginx) ----
@@ -37,7 +44,14 @@ services:
       DRIVER_MATCHING_URL: http://driver-matching:3002/driver/match  
       DOWNSTREAM_TIMEOUT: "5"
     depends_on:
-      - driver-matching
+      driver-matching:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
 
   # ---- driver-matching — internal only ----
@@ -51,7 +65,14 @@ services:
       DISPATCH_URL: http://ride-dispatch:3003/ride/dispatch
       DOWNSTREAM_TIMEOUT: "5"
     depends_on:
-      - ride-dispatch
+      ride-dispatch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3002/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
 
   # ---- ride-dispatch — internal only ----
@@ -64,5 +85,10 @@ services:
       SERVICE_PORT: "3003"
       CALLBACK_URL: http://ride-booking:3001/ride/callback             
       DOWNSTREAM_TIMEOUT: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3003/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
-
