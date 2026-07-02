@@ -51,17 +51,20 @@ walkthrough, see **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Documentation
 
+This README is the operational entry point. The files below contain the deeper
+design notes, test procedures, and recorded evidence.
+
 | Doc | What it covers |
 |-----|----------------|
-| [docs/TESTING.md](docs/TESTING.md) | Step-by-step walkthrough of every scenario (health, chain, failures, reboot, security) |
-| [docs/VALIDATION_EVIDENCE.md](docs/VALIDATION_EVIDENCE.md) | Proof pack (VM) — each claim with command, expected vs. actual, pass/fail |
-| [docs/CONTAINER_VALIDATION.md](docs/CONTAINER_VALIDATION.md) | Docker Compose validation — the 7 container tests |
-| [docs/architecture.md](docs/architecture.md) | System architecture and request flow |
-| [docs/systemd.md](docs/systemd.md) | Service lifecycle, dependency ordering, failure demos |
-| [docs/service-discovery-troubleshooting.md](docs/service-discovery-troubleshooting.md) | Name resolution / `/etc/hosts` issues |
-| [docs/driver-matching-unavailable.md](docs/driver-matching-unavailable.md) | What happens when a dependency is down |
-| [docs/failure-scenarios.md](docs/failure-scenarios.md) | Simulating and recovering from failures |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | General troubleshooting reference |
+| [Architecture](docs/architecture.md) | Detailed component responsibilities, trust boundaries, and end-to-end request flow |
+| [VM testing guide](docs/TESTING.md) | Ordered VM walkthrough: health, chain, failures, reboot, and security |
+| [VM validation evidence](docs/VALIDATION_EVIDENCE.md) | Recorded VM results with commands, expected behavior, actual behavior, and verdicts |
+| [Container validation evidence](docs/CONTAINER_VALIDATION.md) | Seven Docker Compose tests with expected results and screenshots |
+| [systemd operations](docs/systemd.md) | VM service lifecycle, dependency ordering, readiness, and restart behavior |
+| [Service discovery troubleshooting](docs/service-discovery-troubleshooting.md) | `/etc/hosts` and internal-name diagnosis for the VM runtime |
+| [Driver-matching unavailable](docs/driver-matching-unavailable.md) | Controlled Service B failure and recovery behavior |
+| [Failure scenarios](docs/failure-scenarios.md) | Failure injection and recovery procedures |
+| [Troubleshooting](docs/troubleshooting.md) | General diagnosis for services, ports, Nginx, networking, and logs |
 
 ---
 
@@ -87,49 +90,74 @@ No external APIs are required.
 
 ## Architecture
 
-| Component              | Port | Role                    |
-| ---------------------- | ---: | ----------------------- |
-| Nginx                  |   80 | Public Entry Point      |
-| Ride Booking API       | 3001 | ride-booking — public via Nginx only |
-| Driver Matching Service| 3002 | driver-matching — internal only |
-| Ride Dispatch Service  | 3003 | ride-dispatch — internal only |
+The application behavior is the same in both runtimes; only lifecycle,
+discovery, networking, and log collection change.
+
+| Component | Application port | VM/systemd runtime | Docker Compose runtime |
+|-----------|-----------------:|--------------------|------------------------|
+| Nginx | 80 | Public entry on VM port 80 | Only published container: host `8080` → container `80` |
+| `ride-booking` | 3001 | `127.0.0.1:3001`; reached through Nginx | Internal Compose service `ride-booking:3001` |
+| `driver-matching` | 3002 | `127.0.0.1:3002`; internal only | Internal Compose service `driver-matching:3002` |
+| `ride-dispatch` | 3003 | `127.0.0.1:3003`; internal only | Internal Compose service `ride-dispatch:3003` |
 
 ### Request Flow
 
-```
+```text
 Client
   ↓
-Nginx (port 80)
+Nginx
   ↓
-ride-booking — Ride Booking API (port 3001)
+ride-booking (Service A)
   ↓
-driver-matching — Driver Matching Service (port 3002)
+driver-matching (Service B)
   ↓
-ride-dispatch — Ride Dispatch Service (port 3003)
+ride-dispatch (Service C)
   ↓
-ride-booking — callback received
+ride-booking callback
+  ↓
+Client response
 ```
+
+One `X-Request-ID` and one `ride_id` are propagated through every hop so the
+Nginx access log and all three application logs can be correlated.
+
+### Runtime mapping
+
+| Production concern | VM implementation | Compose implementation |
+|--------------------|-------------------|------------------------|
+| Lifecycle | systemd units | Compose services |
+| Discovery | `/etc/hosts` names such as `driver-matching.internal` | Docker DNS names such as `driver-matching` |
+| Isolation | loopback binding plus UFW | Internal Compose network plus no published application ports |
+| Logs | `journalctl` and VM Nginx log files | Container stdout/stderr through `docker compose logs` |
+| Readiness | `wait-for-deps.sh` in `ExecStartPre` | Container health checks plus `condition: service_healthy` |
+| Restart | `Restart=on-failure` | `restart: unless-stopped` |
+
+For the expanded design and trust boundaries, see
+[docs/architecture.md](docs/architecture.md).
 
 ### Responsibilities
 
 #### Nginx — Public Entry Point
 
-The only externally reachable component. Forwards all traffic to ride-booking by discovery name.
+The only externally reachable component. It terminates the public connection,
+creates or preserves the trace ID, and forwards application traffic only to
+`ride-booking`.
 
 Endpoints:
 
-* `GET /nginx-health` — Nginx-only health check (does not touch any service)
-* `/*` — everything else is proxied to ride-booking
+- `GET /nginx-health` — Nginx-only health check; no application service is called
+- `/*` — proxied to `ride-booking`
 
 #### ride-booking — Ride Booking API (port 3001)
 
-The only publicly accessible service. All external traffic enters here through Nginx.
+The first application service, but never directly published. It accepts traffic
+only through Nginx, calls `driver-matching`, and receives the final callback.
 
 Endpoints:
 
-* `GET /health` — health check
-* `POST /ride/request` — initiates the full ride booking flow (ride-booking → driver-matching → ride-dispatch → ride-booking)
-* `POST /ride/callback` — receives the dispatch confirmation from ride-dispatch
+- `GET /health` — process health check
+- `POST /ride/request` — starts the full request chain
+- `POST /ride/callback` — receives dispatch confirmation
 
 #### driver-matching — Driver Matching Service (port 3002)
 
@@ -137,8 +165,8 @@ Internal only. Receives requests from ride-booking, matches the nearest availabl
 
 Endpoints:
 
-* `GET /health` — health check
-* `POST /driver/match` — matches a driver and calls ride-dispatch
+- `GET /health` — process health check
+- `POST /driver/match` — matches a driver and calls `ride-dispatch`
 
 #### ride-dispatch — Ride Dispatch Service (port 3003)
 
@@ -146,8 +174,8 @@ Internal only. Receives the matched driver from driver-matching, finalizes dispa
 
 Endpoints:
 
-* `GET /health` — health check
-* `POST /ride/dispatch` — dispatches the ride and calls back to ride-booking
+- `GET /health` — process health check
+- `POST /ride/dispatch` — dispatches the ride and calls back to `ride-booking`
 
 ---
 
@@ -195,49 +223,57 @@ If resolution fails:
 
 ---
 
-## Reverse Proxy
+## Nginx Reverse Proxy
 
-Nginx listens on port 80 and forwards all traffic to ride-booking at `ride-booking.internal:3001`.
+Nginx is the single public boundary in both runtimes. It exposes its own
+`/nginx-health` endpoint and proxies every other path to `ride-booking`.
+`driver-matching` and `ride-dispatch` are deliberately absent from the public
+route configuration.
 
-driver-matching and ride-dispatch are never referenced in the Nginx configuration and are not reachable through it.
+### Configuration by runtime
 
-### Nginx-specific health check
+| Runtime | Configuration | Public address | Upstream | Log destination |
+|---------|---------------|----------------|----------|-----------------|
+| VM/systemd | [`nginx/production-service-lab.conf`](nginx/production-service-lab.conf) | VM port 80 | `ride-booking.internal:3001` through `/etc/hosts` | `/var/log/nginx/ride-booking_*.log` |
+| Docker Compose | [`nginx/compose.conf`](nginx/compose.conf) | `localhost:8080` | `ride-booking:3001` through Docker DNS | `/dev/stdout` and `/dev/stderr` |
 
-> `install.sh` already deploys and reloads this config. The `cp` + `reload` lines
-> below are only needed for **manual setup** or after editing the config — if you
-> ran the installer, just run the `curl`.
+The Compose file mounts the container configuration read-only:
 
-```bash
-sudo cp nginx/production-service-lab.conf /etc/nginx/sites-available/production-service-lab
-sudo nginx -t && sudo systemctl reload nginx
-curl http://localhost/nginx-health
-# ok
+```yaml
+volumes:
+  - ./nginx/compose.conf:/etc/nginx/conf.d/default.conf:ro
 ```
 
-This is answered by Nginx itself — ride-booking is not involved.
+Both configurations:
 
-### Why Nginx
+- Disable the Nginx version in response headers with `server_tokens off`.
+- Reuse a client-supplied `X-Request-ID` or generate one at the front door.
+- Add the trace ID, upstream address, status, and request time to access logs.
+- Forward `Host`, client IP, and forwarding headers to `ride-booking`.
+- Return `200 OK` from `/nginx-health` without calling an application service.
 
-* Provides a single public entry point
-* Hides internal services from the outside
-* Propagates the `X-Request-ID` trace header through the entire chain
-* Makes it easy to add routing, rate limiting, or TLS in future
+### Verify Nginx
 
-### Troubleshooting Nginx
+VM/systemd:
 
 ```bash
-# Test configuration syntax
 sudo nginx -t
-
-# Check status
 sudo systemctl status nginx
-
-# View recent logs
-sudo journalctl -u nginx -n 50
-
-# View full configuration
-sudo nginx -T
+curl -i http://localhost/nginx-health
+sudo tail -n 20 /var/log/nginx/ride-booking_access.log
 ```
+
+Docker Compose:
+
+```bash
+docker compose exec nginx nginx -t
+curl -i http://localhost:8080/nginx-health
+docker compose logs nginx
+```
+
+If the Nginx health check succeeds but `/health` returns `502`, Nginx is
+running and the fault is between Nginx and `ride-booking`. See
+[docs/troubleshooting.md](docs/troubleshooting.md) for the diagnostic sequence.
 
 ---
 
@@ -322,87 +358,183 @@ re-syncs `/opt/ridelab` and restarts the services. (`install.sh` is idempotent.)
 
 ## Running with Docker Compose
 
-The same flow also runs in **Docker Compose** — an alternative runtime to the
-VM/systemd setup, preserving the same production properties (Nginx is the only
-public entry point; driver-matching and ride-dispatch are internal-only; services
-discover each other by name; the full ride-booking → driver-matching →
-ride-dispatch → ride-booking callback flow works; logs and tracing work).
+Docker Compose runs the same production flow without systemd, `/etc/hosts`, or
+UFW. Nginx remains the only public entry point; application containers
+communicate over the private Compose network using Docker DNS.
 
-**Prerequisite:** Docker + Docker Compose (e.g. Docker Desktop running).
+```text
+Host :8080
+    ↓
+Nginx :80
+    ↓
+ride-booking :3001
+    ↓
+driver-matching :3002
+    ↓
+ride-dispatch :3003
+    ↓
+ride-booking callback
+```
+
+**Prerequisite:** Docker Engine with the Compose plugin, or Docker Desktop.
+Make sure no other project is using host port 8080.
 
 ### Container files
 
-- [`docker-compose.yml`](docker-compose.yml) defines Nginx and the three
-  application services, their restart policies, environment variables, startup
-  commands, and private Compose network. Only Nginx publishes a host port.
-- [`Dockerfile`](Dockerfile) is shared by ride-booking, driver-matching, and
-  ride-dispatch because all three are Python/Uvicorn services with the same
-  dependencies and source layout. Compose selects the correct service by
-  overriding the working directory, command, and port.
-- [`nginx/compose.conf`](nginx/compose.conf) routes public traffic only to
-  ride-booking using its Compose DNS name and sends Nginx logs to stdout/stderr.
-- [`.dockerignore`](.dockerignore) keeps Git data, virtual environments, caches,
-  logs, VM files, and other development-only content out of the image build
-  context.
-- [`docs/CONTAINER_VALIDATION.md`](docs/CONTAINER_VALIDATION.md) records the
-  seven required runtime tests and their screenshot evidence.
+| File | Purpose |
+|------|---------|
+| [`docker-compose.yml`](docker-compose.yml) | Defines Nginx and the three application services, health checks, dependency readiness, restart policies, environment variables, and networking |
+| [`Dockerfile`](Dockerfile) | Builds one shared Python image because all three services use the same Uvicorn runtime, dependencies, and source layout |
+| [`.dockerignore`](.dockerignore) | Excludes Git data, virtual environments, caches, logs, VM files, and documentation from the image build context |
+| [`nginx/compose.conf`](nginx/compose.conf) | Routes public traffic only to `ride-booking` and sends access/error logs to container stdout/stderr |
+| [`docs/CONTAINER_VALIDATION.md`](docs/CONTAINER_VALIDATION.md) | Records the seven required Compose tests with expected behavior, actual results, and screenshots |
+
+The shared image runs the Python services as the unprivileged user
+`appuser` (UID/GID 10001). Compose selects the correct application by setting a
+different working directory, command, port, and downstream URL for each service.
+
+### Startup and readiness
+
+Every container has a health check. `depends_on` with
+`condition: service_healthy` produces this startup order:
+
+```text
+ride-dispatch healthy
+    ↓
+driver-matching healthy
+    ↓
+ride-booking healthy
+    ↓
+Nginx starts
+```
+
+`docker compose ps` should report all four containers as `healthy`. These
+checks confirm that each process answers its own health endpoint; controlled
+downstream failure is tested separately.
 
 ### Start the system
 
 ```bash
 docker compose up --build -d
-docker compose ps              # nginx, ride-booking, driver-matching, ride-dispatch -> Up
+docker compose ps
 ```
 
-### Test the public route
+Expected services:
+
+- `nginx`
+- `ride-booking`
+- `driver-matching`
+- `ride-dispatch`
+
+### Verify health and the public route
 
 ```bash
+curl -i http://localhost:8080/nginx-health
 curl -s http://localhost:8080/health | python3 -m json.tool
-curl -s -X POST http://localhost:8080/ride/request | python3 -m json.tool   # -> accepted + matched_driver
+curl -s -X POST http://localhost:8080/ride/request | python3 -m json.tool
 ```
 
-### Prove driver-matching & ride-dispatch are internal
+Expected:
+
+- `/nginx-health` returns `200 OK` and `ok`.
+- `/health` identifies `ride-booking`.
+- The ride request returns `"status":"accepted"` and a `matched_driver`.
+
+### Networking and service discovery
+
+Only Nginx has a `ports:` entry (`8080:80`). The Python services bind to
+`0.0.0.0` inside their containers so peers can reach them, but they remain
+private because their ports are not published to the host.
 
 ```bash
-# from the host — these FAIL (no published port):
+# Host access fails because these ports are not published:
 curl -i --connect-timeout 3 http://localhost:3002/health
 curl -i --connect-timeout 3 http://localhost:3003/health
 
-# from inside the Compose network — these WORK (resolved by service name):
+# Internal access works through Docker DNS service names:
 docker compose exec ride-booking   curl -s http://driver-matching:3002/health
 docker compose exec driver-matching curl -s http://ride-dispatch:3003/health
 ```
 
+Downstream URLs use Compose names rather than `localhost`:
+
+- `ride-booking` → `http://driver-matching:3002/driver/match`
+- `driver-matching` → `http://ride-dispatch:3003/ride/dispatch`
+- `ride-dispatch` → `http://ride-booking:3001/ride/callback`
+
 ### View logs
 
-```bash
-docker compose logs -f                      # all services
-docker compose logs -f ride-booking         # one service
-docker compose logs | grep <request-id>     # trace one request across services
-```
-
-### Stop / restart a service (failure + recovery)
+Application JSON logs, Uvicorn logs, and Nginx logs all go to stdout/stderr:
 
 ```bash
-docker compose stop driver-matching         # requests now return HTTP 502
-docker compose start driver-matching        # recovers
+docker compose logs -f
+docker compose logs -f ride-booking
+docker compose logs -f driver-matching
+docker compose logs -f ride-dispatch
+docker compose logs -f nginx
+docker compose logs | grep <request-id>
 ```
+
+### Trace a request
+
+```bash
+curl -s -X POST http://localhost:8080/ride/request \
+  -H "X-Request-ID: demo-container-001" >/dev/null
+
+docker compose logs | grep demo-container-001
+```
+
+The request ID should appear in Nginx, ride-booking, driver-matching, and
+ride-dispatch logs with the same ride ID.
+
+### Test failure and recovery
+
+`driver-matching` is Service B. Stopping it leaves Nginx, ride-booking, and
+ride-dispatch running, while new ride requests fail cleanly:
+
+```bash
+docker compose stop driver-matching
+
+curl -i -X POST http://localhost:8080/ride/request \
+  -H "X-Request-ID: fail-service-b-001"
+
+docker compose logs ride-booking | grep fail-service-b-001
+```
+
+Expected: HTTP 502 and a `driver_matching_unreachable` error with
+`outcome=failure`.
+
+Recover:
+
+```bash
+docker compose start driver-matching
+sleep 3
+curl -i -X POST http://localhost:8080/ride/request \
+  -H "X-Request-ID: recovery-001"
+```
+
+The recovery request should return HTTP 200. `restart: unless-stopped` restarts
+containers after crashes or host restarts, but respects an intentional
+`docker compose stop`.
 
 ### Shut everything down
 
 ```bash
-docker compose down                         # stop + remove containers (images kept)
+docker compose down
 ```
 
-Full step-by-step validation: **[docs/CONTAINER_VALIDATION.md](docs/CONTAINER_VALIDATION.md)**.
+This removes the containers and Compose network but keeps the built image.
 
-> **Why these choices:** only `nginx` publishes a port (`8080:80`) — the three
-> services have no `ports:`, so they're unreachable from the host and only talk
-> over the internal Compose network. Inside containers they bind `0.0.0.0` (so
-> peers can reach them) and stay private by *not being published* — the Compose
-> equivalent of the VM's loopback binding. Each service uses
-> `restart: unless-stopped` so a crashed container comes back automatically but
-> stays down when you deliberately stop it.
+### Compose documentation and evidence
+
+- Follow [docs/CONTAINER_VALIDATION.md](docs/CONTAINER_VALIDATION.md) for the
+  complete seven-test review sequence and screenshots.
+- Read [docs/architecture.md](docs/architecture.md) for the expanded request
+  flow and service boundaries.
+- Use [docs/troubleshooting.md](docs/troubleshooting.md) when startup, ports,
+  Nginx, discovery, or logs do not behave as expected.
+- Compare [docs/VALIDATION_EVIDENCE.md](docs/VALIDATION_EVIDENCE.md) to see how
+  the same behavior is proven under the VM/systemd runtime.
 
 ---
 
